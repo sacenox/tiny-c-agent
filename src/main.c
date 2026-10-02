@@ -15,6 +15,7 @@
 #include "headless.h"
 #include "host.h"
 #include "resolve.h"
+#include "resources.h"
 #include "tool.h"
 #include "tui/tui.h"
 
@@ -40,19 +41,6 @@ static char *read_stream(FILE *f) {
     }
     buf[len] = '\0';
     return buf;
-}
-
-static char *read_file(const char *path, char **err) {
-    FILE *f = fopen(path, "rb");
-    if (!f) {
-        size_t n = strlen(path) + 32;
-        *err = malloc(n);
-        if (*err) snprintf(*err, n, "cannot read %s", path);
-        return NULL;
-    }
-    char *s = read_stream(f);
-    fclose(f);
-    return s;
 }
 
 int main(int argc, char **argv) {
@@ -107,19 +95,14 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    char *system_prompt = NULL;
-    if (cfg->system_prompt && cfg->system_prompt[0]) {
-        system_prompt = read_file(cfg->system_prompt, &err);
-        if (!system_prompt) {
-            fprintf(stderr, "%s\n", err ? err : "prompt error");
-            return 1;
-        }
-    } else {
-        system_prompt = strdup("");
-    }
-
     char cwd[PATH_MAX];
     if (!getcwd(cwd, sizeof cwd)) strcpy(cwd, ".");
+
+    cage_resources *resources = cage_resources_build(cfg, cwd, &err);
+    if (!resources) {
+        fprintf(stderr, "%s\n", err ? err : "prompt error");
+        return 1;
+    }
 
     cage_runtime *runtime = cage_runtime_new(model.supports_images);
     cage_hosts_register(runtime);
@@ -129,13 +112,13 @@ int main(int argc, char **argv) {
         cage_tui_config tc = {
             .cfg = cfg,
             .model = model,
-            .system_prompt = system_prompt,
+            .resources = resources,
             .runtime = runtime,
             .cwd = cwd,
         };
         int code = cage_tui_run(&tc);
         cage_runtime_free(runtime);
-        free(system_prompt);
+        cage_resources_free(resources);
         cage_config_free(cfg);
         free(err);
         free(stdin_prompt);
@@ -159,10 +142,10 @@ int main(int argc, char **argv) {
 
     cage_agent a = {0};
     a.model = model;
-    a.system_prompt = system_prompt;
+    a.system_prompt = resources->system_prompt;
     a.tools = &tool;
     a.tools_len = 1;
-    a.effort = cfg->effort;
+
     a.runtime = runtime;
     a.session = session;
     a.on_event = cage_headless_event;
@@ -177,7 +160,7 @@ int main(int argc, char **argv) {
     cage_headless_free(&head);
     cage_runtime_free(runtime);
     cage_session_close(session);
-    free(system_prompt);
+    cage_resources_free(resources);
     cage_config_free(cfg);
     free(err);
     free(stdin_prompt);

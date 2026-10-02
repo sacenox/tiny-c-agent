@@ -11,6 +11,9 @@
 
 #include <yyjson.h>
 
+#include "http.h"
+#include "sse.h"
+
 static void *xmalloc(size_t n) {
     void *p = malloc(n);
     if (!p) abort();
@@ -234,8 +237,6 @@ typedef struct {
 } tool_acc;
 
 typedef struct {
-    buf pending;  // bytes not yet split into SSE lines
-    buf raw;      // response body, kept only for error messages
     buf text;
     buf reasoning;
     tool_acc *calls;
@@ -245,8 +246,6 @@ typedef struct {
     long tokens_out;
     long tokens_total;
     char *error;
-    int http_status;
-    const volatile bool *cancel;
     cage_stream_fn emit;
     void *user;
 } sse_state;
@@ -358,35 +357,11 @@ static void handle_data(sse_state *st, const char *json, size_t len) {
     yyjson_doc_free(doc);
 }
 
-static void handle_line(sse_state *st, const char *line, size_t len) {
-    if (len < 5 || memcmp(line, "data:", 5) != 0) return;
-    const char *p = line + 5;
-    const char *end = line + len;
-    while (p < end && *p == ' ') p++;
-    if (end - p == 6 && memcmp(p, "[DONE]", 6) == 0) return;
-    if (end > p) handle_data(st, p, (size_t)(end - p));
-}
-
-static void sse_feed(sse_state *st, const char *data, size_t n) {
-    buf_add(&st->pending, data, n);
-    size_t start = 0;
-    for (size_t i = 0; i < st->pending.len; i++) {
-        if (st->pending.data[i] != '\n') continue;
-        size_t end = i;
-        if (end > start && st->pending.data[end - 1] == '\r') end--;
-        handle_line(st, st->pending.data + start, end - start);
-        start = i + 1;
-    }
-    if (start > 0) {
-        memmove(st->pending.data, st->pending.data + start, st->pending.len - start);
-        st->pending.len -= start;
-        st->pending.data[st->pending.len] = '\0';
-    }
+static void on_data(const char *json, size_t len, void *user) {
+    handle_data(user, json, len);
 }
 
 static void sse_free(sse_state *st) {
-    buf_free(&st->pending);
-    buf_free(&st->raw);
     buf_free(&st->text);
     buf_free(&st->reasoning);
     for (size_t i = 0; i < st->calls_len; i++) {
@@ -433,35 +408,7 @@ static void finalize(sse_state *st, cage_message *out) {
     else out->stop_reason = xstrdup("stop");
 }
 
-// ---- curl -----------------------------------------------------------------
-
-static size_t on_write(char *ptr, size_t size, size_t nmemb, void *ud) {
-    sse_state *st = ud;
-    size_t n = size * nmemb;
-    if (st->cancel && *st->cancel) return 0;
-    if (st->http_status >= 400) buf_add(&st->raw, ptr, n);
-    else sse_feed(st, ptr, n);
-    return n;
-}
-
-static size_t on_header(char *ptr, size_t size, size_t nmemb, void *ud) {
-    sse_state *st = ud;
-    size_t n = size * nmemb;
-    if (n >= 5 && memcmp(ptr, "HTTP/", 5) == 0) {
-        const char *sp = memchr(ptr, ' ', n);
-        if (sp) st->http_status = atoi(sp + 1);
-    }
-    return n;
-}
-
-static int on_xfer(void *ud, curl_off_t dlt, curl_off_t dln, curl_off_t ult, curl_off_t uln) {
-    (void)dlt;
-    (void)dln;
-    (void)ult;
-    (void)uln;
-    sse_state *st = ud;
-    return (st->cancel && *st->cancel) ? 1 : 0;
-}
+// ---- transport ------------------------------------------------------------
 
 static char *endpoint_url(const char *base) {
     if (!base || !base[0]) return NULL;
@@ -472,25 +419,6 @@ static char *endpoint_url(const char *base) {
     char *url = xmalloc(size);
     snprintf(url, size, slash ? "%s%s" : "%s/%s", base, path);
     return url;
-}
-
-static char *http_error(int status, const buf *body) {
-    const char *msg = NULL;
-    yyjson_doc *doc = body->data ? yyjson_read(body->data, body->len, 0) : NULL;
-    if (doc) {
-        yyjson_val *err = yyjson_obj_get(yyjson_doc_get_root(doc), "error");
-        if (yyjson_is_obj(err)) {
-            yyjson_val *m = yyjson_obj_get(err, "message");
-            if (yyjson_is_str(m)) msg = yyjson_get_str(m);
-        } else if (yyjson_is_str(err)) {
-            msg = yyjson_get_str(err);
-        }
-    }
-    char detail[512];
-    snprintf(detail, sizeof detail, "provider: HTTP %d: %s", status,
-             msg ? msg : (body->data ? body->data : ""));
-    if (doc) yyjson_doc_free(doc);
-    return xstrdup(detail);
 }
 
 int cage_openai_completions_stream(const cage_model *model, const cage_context *ctx,
@@ -511,16 +439,8 @@ int cage_openai_completions_stream(const cage_model *model, const cage_context *
     }
 
     sse_state st = {0};
-    st.cancel = cancel;
     st.emit = emit;
     st.user = user;
-
-    CURL *curl = curl_easy_init();
-    if (!curl) {
-        free(url);
-        free(body);
-        return fail(err, "provider: cannot init curl");
-    }
 
     char *auth = NULL;
     char *session = NULL;
@@ -540,43 +460,36 @@ int cage_openai_completions_stream(const cage_model *model, const cage_context *
         headers = curl_slist_append(headers, session);
     }
 
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, on_write);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &st);
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, on_header);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &st);
-    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, on_xfer);
-    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &st);
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
+    cage_http_request req = {
+        .url = url,
+        .body = body,
+        .headers = headers,
+        .cancel = cancel,
+        .on_data = on_data,
+        .user = &st,
+    };
+    int rc = cage_http_stream(&req);
 
-    CURLcode res = curl_easy_perform(curl);
-
-    int rc = 0;
-    bool cancelled = (cancel && *cancel) || res == CURLE_ABORTED_BY_CALLBACK;
-    if (cancelled) {
+    if (req.aborted) {
         out->stop_reason = xstrdup("aborted");
-    } else if (res != CURLE_OK) {
-        rc = fail(err, "provider: %s", curl_easy_strerror(res));
-    } else if (st.http_status >= 400) {
-        *err = http_error(st.http_status, &st.raw);
+        rc = 0;
+    } else if (req.error) {
+        *err = req.error;
+        req.error = NULL;
         rc = -1;
     } else if (st.error) {
         out->stop_reason = xstrdup("error");
         out->error_message = xstrdup(st.error);
+        rc = 0;
     } else {
         finalize(&st, out);
+        rc = 0;
     }
 
     curl_slist_free_all(headers);
     free(auth);
     free(session);
-    curl_easy_cleanup(curl);
+    free(req.error);
     free(url);
     free(body);
     sse_free(&st);

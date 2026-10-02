@@ -236,6 +236,10 @@ bool cage_runtime_supports_images(const cage_runtime *r) {
     return r->supports_images;
 }
 
+void cage_runtime_set_supports_images(cage_runtime *r, bool supports_images) {
+    r->supports_images = supports_images;
+}
+
 bool cage_runtime_cancelled(const cage_runtime *r) {
     return r->cancel && *r->cancel;
 }

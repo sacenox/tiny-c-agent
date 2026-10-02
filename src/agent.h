@@ -17,7 +17,6 @@ typedef struct {
     const char *system_prompt;
     const cage_tool *tools;
     size_t tools_len;
-    const char *effort;
 
     // Tool execution. Required once the model asks for a tool.
     cage_runtime *runtime;

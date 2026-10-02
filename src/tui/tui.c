@@ -23,6 +23,7 @@
 #include "editor.h"
 #include "highlight.h"
 #include "message.h"
+#include "resolve.h"
 #include "session.h"
 #include "stream.h"
 #include "term.h"
@@ -104,6 +105,7 @@ static void free_rows(char **rows, size_t n) {
 
 typedef struct {
     const cage_tui_config *c;
+    cage_model model;
     cage_agent agent;
     cage_tool tool;
     cage_session *session;
@@ -947,11 +949,80 @@ static void command_new_session(void *user) {
     t->agent.messages_len = 0;
 }
 
+// The one-line model banner: "cage · provider/model · effort".
+static char *model_line(tui *t) {
+    tui_buf b;
+    buf_init(&b);
+    buf_adds(&b, "cage · ");
+    buf_adds(&b, t->model.provider ? t->model.provider : "no provider");
+    buf_addc(&b, '/');
+    buf_adds(&b, t->model.model ? t->model.model : "no model");
+    if (t->model.effort) {
+        buf_adds(&b, " · ");
+        buf_adds(&b, t->model.effort);
+    }
+    return b.data ? buf_steal(&b) : xstrdup("");
+}
+
+static long window_for(const char *provider, const char *model) {
+    if (!provider || !model) return 0;
+    const cage_model_info *info = cage_catalog_lookup(cage_provider_canonical(provider), model);
+    return info ? info->context_limit : 0;
+}
+
+// Switches the running session to a provider/model/effort, persists the change,
+// and repoints the agent's model. A NULL argument leaves that field unchanged.
+static int command_apply(void *user, const char *provider, const char *model,
+                         const char *effort, char **err) {
+    if (err) *err = NULL;
+    tui *t = user;
+    cage_config *cfg = t->c->cfg;
+
+    const char *new_provider = provider ? provider : cfg->provider;
+    const char *new_model = model ? model : cfg->model;
+    const char *new_effort = effort ? effort : cfg->effort;
+
+    // Validate by resolving against a shallow copy before touching anything.
+    cage_config probe = *cfg;
+    probe.provider = (char *)new_provider;
+    probe.model = (char *)new_model;
+    probe.effort = (char *)new_effort;
+    cage_model resolved;
+    if (cage_resolve_model(&probe, &resolved, err) != 0) return -1;
+
+    if (cage_config_save(provider, model, effort, err) != 0) return -1;
+
+    if (provider) {
+        free(cfg->provider);
+        cfg->provider = xstrdup(provider);
+    }
+    if (model) {
+        free(cfg->model);
+        cfg->model = xstrdup(model);
+    }
+    if (effort) {
+        free(cfg->effort);
+        cfg->effort = xstrdup(effort);
+    }
+
+    if (cage_resolve_model(cfg, &t->model, err) != 0) return -1;
+    t->agent.model = t->model;
+    t->context_window = window_for(cfg->provider, cfg->model);
+    if (t->c->runtime) cage_runtime_set_supports_images(t->c->runtime, t->model.supports_images);
+
+    char *line = model_line(t);
+    t->separator = true;
+    command_write(t, line);
+    return 0;
+}
+
 static void run_command(tui *t, const cage_command *cmd, const char *args) {
     cage_command_ctx ctx = {
         .user = t,
         .write = command_write,
         .new_session = command_new_session,
+        .cfg = t->c->cfg,
+        .apply = command_apply,
     };
     cmd->run(&ctx, args);
 }
@@ -1136,27 +1207,41 @@ static void terminal_restore(tui *t) {
     if (t->raw) tcsetattr(t->in_fd, TCSAFLUSH, &t->orig);
 }
 
-static void push_banner(tui *t) {
-    tui_buf b;
-    buf_init(&b);
-    buf_adds(&b, "cage");
-    buf_adds(&b, " · ");
-    buf_adds(&b, t->c->model.provider ? t->c->model.provider : "no provider");
-    buf_addc(&b, '/');
-    buf_adds(&b, t->c->model.model ? t->c->model.model : "no model");
-    if (t->c->cfg->effort) {
-        buf_adds(&b, " · ");
-        buf_adds(&b, t->c->cfg->effort);
-    }
+// Pushes one styled line into scrollback.
+static void push_line(tui *t, char *text) {
     t->separator = true;
-    cage_body_line bl = {b.data ? buf_steal(&b) : xstrdup(""), NULL, NULL};
-    buf_free(&b);
+    cage_body_line bl = {text, NULL, NULL};
     size_t nrows;
     char **rows = render_rows(&bl, 1, t->width > 0 ? t->width : 80, &nrows);
     for (size_t i = 0; i < nrows; i++) push(t, rows[i]);
     free_rows(rows, nrows);
     free(bl.text);
     t->separator = true;
+}
+
+static void push_banner(tui *t) {
+    push_line(t, model_line(t));
+    const cage_resources *r = t->c->resources;
+    if (!r) return;
+    for (size_t i = 0; i < r->agent_files_len; i++) {
+        tui_buf b;
+        buf_init(&b);
+        buf_adds(&b, "agents · ");
+        buf_adds(&b, r->agent_files[i].path);
+        push_line(t, b.data ? buf_steal(&b) : xstrdup(""));
+        buf_free(&b);
+    }
+    if (r->skills_len > 0) {
+        tui_buf b;
+        buf_init(&b);
+        buf_adds(&b, "skills · ");
+        for (size_t i = 0; i < r->skills_len; i++) {
+            if (i > 0) buf_adds(&b, ", ");
+            buf_adds(&b, r->skills[i].name);
+        }
+        push_line(t, b.data ? buf_steal(&b) : xstrdup(""));
+        buf_free(&b);
+    }
 }
 
 int cage_tui_run(const cage_tui_config *c) {
@@ -1176,8 +1261,8 @@ int cage_tui_run(const cage_tui_config *c) {
     cage_theme_use(c->cfg->theme);
     t.tool = cage_codemode_tool();
 
-    const cage_model_info *info = cage_catalog_lookup(c->model.provider, c->model.model);
-    t.context_window = info ? info->context_limit : 0;
+    t.model = c->model;
+    t.context_window = window_for(c->model.provider, c->model.model);
 
     get_size(&t);
 
@@ -1195,11 +1280,10 @@ int cage_tui_run(const cage_tui_config *c) {
     }
 
     t.agent = (cage_agent){
-        .model = c->model,
-        .system_prompt = c->system_prompt,
+        .model = t.model,
+        .system_prompt = c->resources ? c->resources->system_prompt : "",
         .tools = &t.tool,
         .tools_len = 1,
-        .effort = c->cfg->effort,
         .runtime = c->runtime,
         .session = t.session,
         .on_event = on_event,

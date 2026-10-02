@@ -244,7 +244,7 @@ void cage_agent_turn(cage_agent *a, const char *input) {
             .messages_len = a->messages_len,
         };
         cage_stream_opts opts = {
-            .effort = a->effort,
+            .effort = a->model.effort,
             .session_id = a->session ? cage_session_id(a->session) : NULL,
         };
 

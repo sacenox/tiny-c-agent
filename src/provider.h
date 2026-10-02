@@ -19,6 +19,9 @@ typedef struct {
     const char *base_url;  // API root, without the endpoint path
     cage_api api;
     const char *api_key;   // NULL when the endpoint needs no key
+    // The effort actually sent, after clamping the configured desire to what
+    // the model accepts. NULL lets the provider decide.
+    const char *effort;
     // Whether the model accepts image input. Gates whether `read` attaches
     // images. The generated catalog will set this per model.
     bool supports_images;

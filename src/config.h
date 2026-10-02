@@ -46,6 +46,11 @@ typedef struct {
 // NULL, stores a malloc'd message there (the caller frees it).
 cage_config *cage_config_load(const char *cli_path, char **err);
 
+// Merges the given keys into the global config file, leaving other keys
+// untouched. A NULL argument leaves that key unchanged. Written atomically.
+// Returns 0, or -1 with *err set.
+int cage_config_save(const char *provider, const char *model, const char *effort, char **err);
+
 void cage_config_free(cage_config *cfg);
 
 #endif

@@ -1,10 +1,13 @@
 #include "config.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <yyjson.h>
 
@@ -81,6 +84,18 @@ static void push_str(char ***arr, size_t *len, char *s) {
     *arr = xrealloc(*arr, (*len + 1) * sizeof **arr);
     (*arr)[*len] = s;
     (*len)++;
+}
+
+// Stores a formatted, malloc'd message into *err when err is not NULL.
+static void set_error(char **err, const char *fmt, ...) {
+    if (!err) return;
+    char detail[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(detail, sizeof detail, fmt, ap);
+    va_end(ap);
+    free(*err);
+    *err = xstrdup(detail);
 }
 
 static char *config_file_path(void) {
@@ -324,6 +339,145 @@ static void config_free_members(cage_config *cfg) {
     free(cfg->skills_dirs);
     for (size_t i = 0; i < cfg->custom_providers_len; i++) provider_free(&cfg->custom_providers[i]);
     free(cfg->custom_providers);
+}
+
+// Creates every component of path, like mkdir -p.
+static int mkdirs(const char *path) {
+    char buf[PATH_MAX];
+    size_t len = strlen(path);
+    if (len == 0 || len >= sizeof buf) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    memcpy(buf, path, len + 1);
+    for (char *p = buf + 1; *p; p++) {
+        if (*p != '/') continue;
+        *p = '\0';
+        if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
+        *p = '/';
+    }
+    if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
+    return 0;
+}
+
+// The directory part of a path, or "." when there is no separator.
+static char *dir_of(const char *path) {
+    const char *slash = strrchr(path, '/');
+    if (!slash) return xstrdup(".");
+    size_t n = (size_t)(slash - path);
+    if (n == 0) return xstrdup("/");
+    char *d = xmalloc(n + 1);
+    memcpy(d, path, n);
+    d[n] = '\0';
+    return d;
+}
+
+int cage_config_save(const char *provider, const char *model, const char *effort, char **err) {
+    if (err) *err = NULL;
+    char *path = config_file_path();
+    if (!path) {
+        if (err) *err = xstrdup("cannot locate the global config path");
+        return -1;
+    }
+
+    yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
+    yyjson_mut_val *root = yyjson_mut_obj(doc);
+    yyjson_mut_doc_set_root(doc, root);
+
+    // Carry over every existing key so unrelated settings survive the write.
+    FILE *f = fopen(path, "rb");
+    if (f) {
+        size_t cap = 4096, len = 0;
+        char *text = xmalloc(cap);
+        size_t n;
+        while ((n = fread(text + len, 1, cap - len, f)) > 0) {
+            len += n;
+            if (len == cap) {
+                cap *= 2;
+                text = xrealloc(text, cap);
+            }
+        }
+        fclose(f);
+        yyjson_doc *old = yyjson_read(text, len, READ_FLAGS);
+        free(text);
+        if (old) {
+            yyjson_val *oroot = yyjson_doc_get_root(old);
+            if (yyjson_is_obj(oroot)) {
+                yyjson_obj_iter it = yyjson_obj_iter_with(oroot);
+                yyjson_val *k;
+                while ((k = yyjson_obj_iter_next(&it)) != NULL) {
+                    yyjson_mut_val *mk = yyjson_val_mut_copy(doc, k);
+                    yyjson_mut_val *mv = yyjson_val_mut_copy(doc, yyjson_obj_iter_get_val(k));
+                    yyjson_mut_obj_add(root, mk, mv);
+                }
+            }
+            yyjson_doc_free(old);
+        }
+    }
+
+    struct {
+        const char *key;
+        const char *value;
+    } fields[] = {
+        {"provider", provider},
+        {"model", model},
+        {"effort", effort},
+    };
+    for (size_t i = 0; i < sizeof fields / sizeof fields[0]; i++) {
+        if (!fields[i].value) continue;
+        yyjson_mut_obj_put(root, yyjson_mut_strcpy(doc, fields[i].key),
+                           yyjson_mut_strcpy(doc, fields[i].value));
+    }
+
+    char *body = yyjson_mut_write(doc, YYJSON_WRITE_PRETTY, NULL);
+    yyjson_mut_doc_free(doc);
+    if (!body) {
+        free(path);
+        if (err) *err = xstrdup("cannot serialize config");
+        return -1;
+    }
+
+    char *dir = dir_of(path);
+    if (mkdirs(dir) != 0) {
+        set_error(err, "cannot create %s: %s", dir, strerror(errno));
+        free(dir);
+        free(body);
+        free(path);
+        return -1;
+    }
+    free(dir);
+
+    size_t plen = strlen(path);
+    char *temp = xmalloc(plen + 32);
+    snprintf(temp, plen + 32, "%s.%d.tmp", path, (int)getpid());
+    FILE *out = fopen(temp, "wb");
+    if (!out) {
+        set_error(err, "cannot write %s: %s", path, strerror(errno));
+        free(temp);
+        free(body);
+        free(path);
+        return -1;
+    }
+    int rc = fwrite(body, 1, strlen(body), out) == strlen(body) && fflush(out) == 0 ? 0 : -1;
+    if (fclose(out) != 0) rc = -1;
+    free(body);
+    if (rc != 0) {
+        set_error(err, "%s", "config write failed");
+        remove(temp);
+        free(temp);
+        free(path);
+        return -1;
+    }
+    if (rename(temp, path) != 0) {
+        set_error(err, "cannot replace %s: %s", path, strerror(errno));
+        remove(temp);
+        free(temp);
+        free(path);
+        return -1;
+    }
+    free(temp);
+    free(path);
+    return 0;
 }
 
 cage_config *cage_config_load(const char *cli_path, char **err) {

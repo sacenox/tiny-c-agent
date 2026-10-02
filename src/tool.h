@@ -68,6 +68,7 @@ void cage_runtime_register(cage_runtime *rt, const char *name, cage_host_fn fn, 
 void cage_runtime_output(cage_runtime *rt, const char *chunk);
 void cage_runtime_add_image(cage_runtime *rt, const char *media_type, const char *base64);
 bool cage_runtime_supports_images(const cage_runtime *rt);
+void cage_runtime_set_supports_images(cage_runtime *rt, bool supports_images);
 bool cage_runtime_cancelled(const cage_runtime *rt);
 
 // Runs `script` as an async program. Output chunks go to `out`; the program's

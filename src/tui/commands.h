@@ -5,11 +5,19 @@
 
 #include <stddef.h>
 
+#include "config.h"
+
 // What a command may reach. The TUI provides the callbacks.
 typedef struct {
     void *user;                              // opaque, the TUI
     void (*write)(void *user, char *line);   // commits a styled line, taking ownership
     void (*new_session)(void *user);         // starts a fresh session
+    const cage_config *cfg;                  // the live config, for listing
+    // Applies a provider/model/effort change to the running session and
+    // persists it. A NULL argument leaves that field unchanged. Returns 0, or
+    // -1 with *err set.
+    int (*apply)(void *user, const char *provider, const char *model,
+                 const char *effort, char **err);
 } cage_command_ctx;
 
 typedef struct {

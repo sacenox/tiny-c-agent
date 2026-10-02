@@ -19,6 +19,11 @@ static int fail(char **err, const char *fmt, ...) {
     return -1;
 }
 
+const char *cage_provider_canonical(const char *provider) {
+    if (provider && strcmp(provider, "opencode-zen") == 0) return "opencode";
+    return provider;
+}
+
 int cage_resolve_model(const cage_config *cfg, cage_model *out, char **err) {
     if (err) *err = NULL;
     if (!cfg->provider || !cfg->provider[0])
@@ -32,8 +37,9 @@ int cage_resolve_model(const cage_config *cfg, cage_model *out, char **err) {
     // Built-in models carry their capability in the compiled catalog. Custom
     // providers are uncatalogued, so assume image input; a model that rejects
     // images surfaces the provider error as-is.
-    const cage_model_info *info = cage_catalog_lookup(cfg->provider, cfg->model);
+    const cage_model_info *info = cage_catalog_lookup(cage_provider_canonical(cfg->provider), cfg->model);
     out->supports_images = info ? info->supports_images : true;
+    out->effort = cage_catalog_clamp_effort(info, cfg->effort);
 
     if (strcmp(cfg->provider, "opencode-go") == 0) {
         out->base_url = "https://opencode.ai/zen/go/v1";

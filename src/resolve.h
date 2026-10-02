@@ -6,6 +6,10 @@
 #include "config.h"
 #include "provider.h"
 
+// The catalog provider id behind a configured provider id: "opencode-zen" and
+// "opencode" both name the "opencode" catalog. Other ids pass through.
+const char *cage_provider_canonical(const char *provider);
+
 // Fills `out` from the config. The strings point into `cfg` or the environment,
 // so `cfg` must outlive `out`. Built-in providers use the openai-completions
 // API for now; custom providers use the api written in the config.

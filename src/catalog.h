@@ -23,4 +23,14 @@ typedef struct {
 // caller then falls back to its assumed defaults.
 const cage_model_info *cage_catalog_lookup(const char *provider, const char *model);
 
+// Iteration over the compiled-in table, for listing a provider's models.
+size_t cage_catalog_count(void);
+const cage_model_info *cage_catalog_get(size_t index);
+
+// Clamps a desired effort to what `info` accepts, preferring the next higher
+// level when the exact value is unavailable. Returns a level from the entry's
+// own list, or NULL when the desired effort is NULL. When `info` is NULL the
+// desired value is returned unchanged (unknown model).
+const char *cage_catalog_clamp_effort(const cage_model_info *info, const char *desired);
+
 #endif

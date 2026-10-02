@@ -90,9 +90,16 @@ int main(int argc, char **argv) {
     }
 
     cage_model model;
+    memset(&model, 0, sizeof model);
     if (cage_resolve_model(cfg, &model, &err) != 0) {
-        fprintf(stderr, "%s\n", err ? err : "model error");
-        return 1;
+        if (print_mode) {
+            fprintf(stderr, "%s\n", err ? err : "model error");
+            return 1;
+        }
+        // Keep the interactive TUI usable: the user can pick a provider with
+        // /provider. The turn reports NO_MODEL until one is configured.
+        free(err);
+        err = NULL;
     }
 
     char cwd[PATH_MAX];

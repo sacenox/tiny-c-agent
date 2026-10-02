@@ -1,5 +1,7 @@
 #include "resolve.h"
 
+#include "catalog.h"
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,9 +29,11 @@ int cage_resolve_model(const cage_config *cfg, cage_model *out, char **err) {
     memset(out, 0, sizeof *out);
     out->provider = cfg->provider;
     out->model = cfg->model;
-    // Model image-input capability is not catalogued yet; assume it. A model
-    // that rejects images surfaces the provider error as-is.
-    out->supports_images = true;
+    // Built-in models carry their capability in the compiled catalog. Custom
+    // providers are uncatalogued, so assume image input; a model that rejects
+    // images surfaces the provider error as-is.
+    const cage_model_info *info = cage_catalog_lookup(cfg->provider, cfg->model);
+    out->supports_images = info ? info->supports_images : true;
 
     if (strcmp(cfg->provider, "opencode-go") == 0) {
         out->base_url = "https://opencode.ai/zen/go/v1";

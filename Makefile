@@ -29,8 +29,13 @@ CPPFLAGS += -D_GNU_SOURCE -Isrc -I$(TSJSON)/src -MMD -MP
 CFLAGS   += $(BASE) $(WARN) $(shell pkg-config --cflags $(PKGS))
 LDLIBS   += $(shell pkg-config --libs $(PKGS)) -lqjs
 
-.PHONY: all deps run clean
+.PHONY: all deps catalog run clean
 all: $(BIN)
+
+# Regenerates the committed catalog from models.dev. Run at release time, then
+# commit src/catalog.generated.c.
+catalog:
+	python3 tools/gen_catalog.py
 
 $(BIN): $(OBJS) $(TSJSON_OBJ)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)

@@ -14,7 +14,8 @@ BUILD   := build
 BIN     := $(BUILD)/cage
 
 PKGS    := libuv libcurl ncursesw yyjson tree-sitter \
-           tree-sitter-javascript tree-sitter-bash
+           tree-sitter-javascript tree-sitter-bash \
+           tree-sitter-markdown tree-sitter-markdown-inline
 
 TSJSON  := third_party/tree-sitter-json
 
@@ -23,11 +24,11 @@ OBJS    := $(patsubst src/%.c,$(BUILD)/obj/%.o,$(SRCS))
 TSJSON_OBJ := $(BUILD)/obj/$(TSJSON)/src/parser.o
 DEPS    := $(OBJS:.o=.d) $(TSJSON_OBJ:.o=.d)
 
-BASE     := -std=$(STD) $(OPT)
+BASE     := -std=$(STD) $(OPT) -pthread
 
 CPPFLAGS += -D_GNU_SOURCE -Isrc -I$(TSJSON)/src -MMD -MP
 CFLAGS   += $(BASE) $(WARN) $(shell pkg-config --cflags $(PKGS))
-LDLIBS   += $(shell pkg-config --libs $(PKGS)) -lqjs
+LDLIBS   += $(shell pkg-config --libs $(PKGS)) -lqjs -pthread
 
 .PHONY: all deps catalog run clean
 all: $(BIN)

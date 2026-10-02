@@ -16,6 +16,7 @@
 #include "host.h"
 #include "resolve.h"
 #include "tool.h"
+#include "tui/tui.h"
 
 static volatile bool g_cancel;
 
@@ -81,13 +82,8 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (!print_mode) {
-        fprintf(stderr, "interactive mode is not implemented; use -p PROMPT\n");
-        return 2;
-    }
-
     char *stdin_prompt = NULL;
-    if (!prompt) {
+    if (print_mode && !prompt) {
         if (isatty(fileno(stdin))) {
             fprintf(stderr, "-p requires a prompt\n");
             return 2;
@@ -125,14 +121,34 @@ int main(int argc, char **argv) {
     char cwd[PATH_MAX];
     if (!getcwd(cwd, sizeof cwd)) strcpy(cwd, ".");
 
+    cage_runtime *runtime = cage_runtime_new(model.supports_images);
+    cage_hosts_register(runtime);
+
+    if (!print_mode) {
+        // The TUI owns the terminal and its own signal handlers.
+        cage_tui_config tc = {
+            .cfg = cfg,
+            .model = model,
+            .system_prompt = system_prompt,
+            .runtime = runtime,
+            .cwd = cwd,
+        };
+        int code = cage_tui_run(&tc);
+        cage_runtime_free(runtime);
+        free(system_prompt);
+        cage_config_free(cfg);
+        free(err);
+        free(stdin_prompt);
+        curl_global_cleanup();
+        return code;
+    }
+
     cage_session *session = cage_session_open(cfg->sessions_dir, cwd, prompt, &err);
     if (!session) {
         fprintf(stderr, "%s\n", err ? err : "session error");
         return 1;
     }
 
-    cage_runtime *runtime = cage_runtime_new(model.supports_images);
-    cage_hosts_register(runtime);
     cage_tool tool = cage_codemode_tool();
 
     signal(SIGINT, on_signal);

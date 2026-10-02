@@ -258,6 +258,9 @@ cage_tool_result cage_runtime_run(cage_runtime *r, const char *script,
                                   cage_tool_output_fn out, void *out_user,
                                   const volatile bool *cancel) {
     cage_tool_result res = {0};
+    // QuickJS records the stack top at runtime creation and checks overflow
+    // against it. The TUI runs turns on a worker thread, so refresh it here.
+    JS_UpdateStackTop(r->rt);
     r->out = out;
     r->out_user = out_user;
     r->cancel = cancel;

@@ -8,6 +8,9 @@
 #define CAGE_EVENT_H
 
 #include <stdbool.h>
+#include <stddef.h>
+
+#include "tool.h"
 
 typedef enum {
     CAGE_PHASE_PREPARING,
@@ -40,7 +43,13 @@ typedef struct {
         struct { const char *delta; } reasoning;
         struct { const char *name; const char *arguments; } tool_call;
         struct { const char *chunk; } tool_output;
-        struct { const char *name; const char *text; bool is_error; } tool_result;
+        struct {
+            const char *name;
+            const char *text;
+            bool is_error;
+            const cage_file_diff *diffs;  // display-only; never reaches the model
+            size_t diffs_len;
+        } tool_result;
         struct { const char *json; } message;
         struct { const char *message; } error;
     } u;

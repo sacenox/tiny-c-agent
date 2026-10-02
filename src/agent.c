@@ -6,8 +6,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <yyjson.h>
+
+#include "diff.h"
 
 // Per-turn state passed to the provider and tool callbacks.
 typedef struct {
@@ -185,7 +188,18 @@ static cage_tool_result run_tool(cage_agent *a, turn_state *st, const cage_block
         r.is_error = true;
         return r;
     }
+
+    // The run may write anywhere under the working directory, so a diff of the
+    // tree around it is the only way to report what changed.
+    struct timespec start;
+    clock_gettime(CLOCK_REALTIME, &start);
+    struct cage_snapshot *before = cage_snapshot_capture(NULL);
     r = cage_runtime_run(a->runtime, code, on_tool_output, st, a->cancel);
+    struct cage_snapshot *after = cage_snapshot_capture(&start);
+    r.diffs = cage_snapshot_diff(before, after, &r.diffs_len);
+    cage_snapshot_free(before);
+    cage_snapshot_free(after);
+
     yyjson_doc_free(doc);
     return r;
 }
@@ -306,6 +320,7 @@ void cage_agent_turn(cage_agent *a, const char *input) {
 
             if (push_message(a, &tm, &perr) != 0) {
                 free(held.data);
+                cage_file_diffs_free(tr.diffs, tr.diffs_len);
                 emit_error(a, perr);
                 free(perr);
                 return;
@@ -314,7 +329,10 @@ void cage_agent_turn(cage_agent *a, const char *input) {
             re.u.tool_result.name = b->tool_name;
             re.u.tool_result.text = tm.blocks_len ? tm.blocks[0].text : "";
             re.u.tool_result.is_error = tm.is_error;
+            re.u.tool_result.diffs = tr.diffs;
+            re.u.tool_result.diffs_len = tr.diffs_len;
             emit(a, &re);
+            cage_file_diffs_free(tr.diffs, tr.diffs_len);
         }
 
         if (cancelled) {

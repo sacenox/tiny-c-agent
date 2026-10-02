@@ -19,11 +19,22 @@ typedef struct {
     char *data;        // base64 payload
 } cage_image;
 
+// One changed file under the working directory, display-only: it never reaches
+// the model. `patch` is a unified diff; it is NULL when the content cannot be
+// tracked, in which case `note` explains why.
+typedef struct {
+    char *path;   // relative to the working directory
+    char *patch;  // unified diff body, or NULL
+    char *note;   // reason when no patch exists, or NULL
+} cage_file_diff;
+
 typedef struct {
     char *text;          // the tool result text; always set
     bool is_error;
     cage_image *images;  // owned by the caller
     size_t images_len;
+    cage_file_diff *diffs;  // owned by the caller; display-only
+    size_t diffs_len;
 } cage_tool_result;
 
 typedef struct cage_runtime cage_runtime;

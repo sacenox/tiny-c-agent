@@ -22,6 +22,9 @@ struct cage_runtime {
     cage_tool_output_fn out;
     void *out_user;
     const volatile bool *cancel;
+    bool supports_images;
+    cage_image *images;  // attached during a run, moved to the result
+    size_t images_len;
 };
 
 // ---- small helpers --------------------------------------------------------
@@ -170,19 +173,27 @@ static JSValue js_host(JSContext *ctx, JSValueConst this_val, int argc,
     const char *cargs = JS_ToCString(ctx, jargs);
     JS_FreeValue(ctx, jargs);
 
-    char *result = h->fn(cargs ? cargs : "[]", h->user);
+    cage_host_result result = h->fn(cargs ? cargs : "[]", h->user);
     JS_FreeCString(ctx, cargs);
-    if (!result) return JS_NULL;
 
-    JSValue parsed = JS_ParseJSON(ctx, result, strlen(result), "<host>");
-    free(result);
+    if (result.error) {
+        free(result.json);
+        JSValue exc = JS_ThrowPlainError(ctx, "%s", result.error);
+        free(result.error);
+        return exc;
+    }
+    if (!result.json) return JS_NULL;
+
+    JSValue parsed = JS_ParseJSON(ctx, result.json, strlen(result.json), "<host>");
+    free(result.json);
     return parsed;
 }
 
-cage_runtime *cage_runtime_new(void) {
+cage_runtime *cage_runtime_new(bool supports_images) {
     cage_runtime *r = xcalloc(1, sizeof *r);
     r->rt = JS_NewRuntime();
     r->ctx = JS_NewContext(r->rt);
+    r->supports_images = supports_images;
     JS_SetContextOpaque(r->ctx, r);
     JS_SetInterruptHandler(r->rt, on_interrupt, r);
 
@@ -208,10 +219,36 @@ void cage_runtime_register(cage_runtime *r, const char *name, cage_host_fn fn, v
     JS_FreeValue(r->ctx, global);
 }
 
+void cage_runtime_output(cage_runtime *r, const char *chunk) {
+    if (r->out) r->out(chunk, r->out_user);
+}
+
+void cage_runtime_add_image(cage_runtime *r, const char *media_type, const char *base64) {
+    r->images = realloc(r->images, (r->images_len + 1) * sizeof *r->images);
+    if (!r->images) abort();
+    r->images[r->images_len++] = (cage_image){
+        .media_type = xstrdup(media_type),
+        .data = xstrdup(base64),
+    };
+}
+
+bool cage_runtime_supports_images(const cage_runtime *r) {
+    return r->supports_images;
+}
+
+bool cage_runtime_cancelled(const cage_runtime *r) {
+    return r->cancel && *r->cancel;
+}
+
 void cage_runtime_free(cage_runtime *r) {
     if (!r) return;
     for (size_t i = 0; i < r->hosts_len; i++) free(r->hosts[i].name);
     free(r->hosts);
+    for (size_t i = 0; i < r->images_len; i++) {
+        free(r->images[i].media_type);
+        free(r->images[i].data);
+    }
+    free(r->images);
     JS_FreeContext(r->ctx);
     JS_FreeRuntime(r->rt);
     free(r);
@@ -224,6 +261,8 @@ cage_tool_result cage_runtime_run(cage_runtime *r, const char *script,
     r->out = out;
     r->out_user = out_user;
     r->cancel = cancel;
+    r->images = NULL;
+    r->images_len = 0;
 
     const char *pre = "(async () => {\n";
     const char *post = "\n})()";
@@ -238,16 +277,17 @@ cage_tool_result cage_runtime_run(cage_runtime *r, const char *script,
 
     if (cancel && *cancel) {
         if (JS_IsException(fn)) JS_FreeValue(r->ctx, JS_GetException(r->ctx));
+        else JS_FreeValue(r->ctx, fn);
         res.text = xstrdup("codemode: aborted");
         res.is_error = true;
-        return res;
+        goto done;
     }
     if (JS_IsException(fn)) {
         JSValue e = JS_GetException(r->ctx);
         res.text = error_text(r->ctx, e);
         res.is_error = true;
         JS_FreeValue(r->ctx, e);
-        return res;
+        goto done;
     }
 
     JSContext *jc;
@@ -257,7 +297,7 @@ cage_tool_result cage_runtime_run(cage_runtime *r, const char *script,
         JS_FreeValue(r->ctx, fn);
         res.text = xstrdup("codemode: aborted");
         res.is_error = true;
-        return res;
+        goto done;
     }
 
     switch (JS_PromiseState(r->ctx, fn)) {
@@ -280,6 +320,12 @@ cage_tool_result cage_runtime_run(cage_runtime *r, const char *script,
         break;
     }
     JS_FreeValue(r->ctx, fn);
+
+done:
+    res.images = r->images;
+    res.images_len = r->images_len;
+    r->images = NULL;
+    r->images_len = 0;
     return res;
 }
 
@@ -287,9 +333,12 @@ cage_tool cage_codemode_tool(void) {
     cage_tool t = {
         .name = "codemode",
         .description =
-            "Run a JavaScript program. The program may use await. Call the "
-            "provided host functions directly as globals, write progress with "
-            "console.log, and return the value to report back as the result.",
+            "Run a JavaScript program. The program may use await. The globals "
+            "are: read(path) returns a file's text; edit(path, oldText, newText) "
+            "replaces the single occurrence of oldText in a file (empty oldText "
+            "creates it); bash(command) runs a shell command and resolves to "
+            "{ output, exitCode }. Write progress with console.log and return the "
+            "value to report back as the result.",
         .parameters =
             "{\"type\":\"object\","
             "\"properties\":{\"code\":{\"type\":\"string\",\"description\":\"JavaScript to run\"}},"

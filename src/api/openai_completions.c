@@ -81,6 +81,10 @@ static void add_message(yyjson_mut_doc *doc, yyjson_mut_val *arr, const cage_mes
         yyjson_mut_obj_add_strcpy(doc, o, "role", "tool");
         yyjson_mut_obj_add_strcpy(doc, o, "tool_call_id", m->tool_call_id ? m->tool_call_id : "");
         char *t = join_text(m);
+        if (t[0] == '\0' && cage_message_has_image(m)) {
+            free(t);
+            t = xstrdup("(see attached image)");
+        }
         yyjson_mut_obj_add_strcpy(doc, o, "content", t);
         free(t);
         return;
@@ -164,8 +168,54 @@ static char *build_request(const cage_model *model, const cage_context *ctx,
         yyjson_mut_obj_add_strcpy(doc, sys, "role", "system");
         yyjson_mut_obj_add_strcpy(doc, sys, "content", ctx->system_prompt);
     }
-    for (size_t i = 0; i < ctx->messages_len; i++)
-        add_message(doc, messages, &ctx->messages[i]);
+    for (size_t i = 0; i < ctx->messages_len; ) {
+        if (ctx->messages[i].role == CAGE_ROLE_TOOL) {
+            // A run of tool results lands together. Any images among them are
+            // sent as one following user message, because a tool message's
+            // content is a string and the provider rejects a user message
+            // between a call and its results.
+            size_t j = i;
+            bool has_images = false;
+            for (; j < ctx->messages_len && ctx->messages[j].role == CAGE_ROLE_TOOL; j++) {
+                add_message(doc, messages, &ctx->messages[j]);
+                if (cage_message_has_image(&ctx->messages[j])) has_images = true;
+            }
+            if (has_images) {
+                yyjson_mut_val *um = yyjson_mut_obj(doc);
+                yyjson_mut_arr_add_val(messages, um);
+                yyjson_mut_obj_add_strcpy(doc, um, "role", "user");
+                yyjson_mut_val *content = yyjson_mut_arr(doc);
+                yyjson_mut_obj_add_val(doc, um, "content", content);
+                yyjson_mut_val *head = yyjson_mut_obj(doc);
+                yyjson_mut_arr_add_val(content, head);
+                yyjson_mut_obj_add_strcpy(doc, head, "type", "text");
+                yyjson_mut_obj_add_strcpy(doc, head, "text", "Attached image(s) from tool result:");
+                for (size_t m = i; m < j; m++) {
+                    const cage_message *msg = &ctx->messages[m];
+                    for (size_t k = 0; k < msg->blocks_len; k++) {
+                        const cage_block *b = &msg->blocks[k];
+                        if (b->type != CAGE_BLOCK_IMAGE) continue;
+                        yyjson_mut_val *iu = yyjson_mut_obj(doc);
+                        yyjson_mut_arr_add_val(content, iu);
+                        yyjson_mut_obj_add_strcpy(doc, iu, "type", "image_url");
+                        yyjson_mut_val *url = yyjson_mut_obj(doc);
+                        yyjson_mut_obj_add_val(doc, iu, "image_url", url);
+                        const char *mt = b->media_type ? b->media_type : "";
+                        const char *bs = b->data ? b->data : "";
+                        size_t need = strlen(mt) + strlen(bs) + 32;
+                        char *u = xmalloc(need);
+                        snprintf(u, need, "data:%s;base64,%s", mt, bs);
+                        yyjson_mut_obj_add_strcpy(doc, url, "url", u);
+                        free(u);
+                    }
+                }
+            }
+            i = j;
+        } else {
+            add_message(doc, messages, &ctx->messages[i]);
+            i++;
+        }
+    }
 
     add_tools(doc, root, ctx);
 

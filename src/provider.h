@@ -19,6 +19,9 @@ typedef struct {
     const char *base_url;  // API root, without the endpoint path
     cage_api api;
     const char *api_key;   // NULL when the endpoint needs no key
+    // Whether the model accepts image input. Gates whether `read` attaches
+    // images. The generated catalog will set this per model.
+    bool supports_images;
     // Providers that route by conversation send this header with the session
     // id. NULL when the provider does not need one.
     const char *session_header;

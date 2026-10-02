@@ -295,6 +295,14 @@ void cage_agent_turn(cage_agent *a, const char *input) {
             cage_tool_result tr = run_tool(a, &st, b);
             cage_message tm = cage_message_tool(b->tool_call_id, tr.text, tr.is_error);
             free(tr.text);
+            for (size_t k = 0; k < tr.images_len; k++) {
+                cage_block *ib = cage_message_add_block(&tm, CAGE_BLOCK_IMAGE);
+                ib->media_type = xstrdup(tr.images[k].media_type);
+                ib->data = xstrdup(tr.images[k].data);
+                free(tr.images[k].media_type);
+                free(tr.images[k].data);
+            }
+            free(tr.images);
 
             if (push_message(a, &tm, &perr) != 0) {
                 free(held.data);

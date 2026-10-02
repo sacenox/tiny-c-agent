@@ -38,6 +38,12 @@ cage_block *cage_message_add_block(cage_message *m, cage_block_type type) {
     return b;
 }
 
+bool cage_message_has_image(const cage_message *m) {
+    for (size_t i = 0; i < m->blocks_len; i++)
+        if (m->blocks[i].type == CAGE_BLOCK_IMAGE) return true;
+    return false;
+}
+
 void cage_message_free(cage_message *m) {
     if (!m) return;
     for (size_t i = 0; i < m->blocks_len; i++) {
@@ -45,6 +51,8 @@ void cage_message_free(cage_message *m) {
         free(m->blocks[i].tool_call_id);
         free(m->blocks[i].tool_name);
         free(m->blocks[i].arguments);
+        free(m->blocks[i].media_type);
+        free(m->blocks[i].data);
     }
     free(m->blocks);
     free(m->tool_call_id);
@@ -80,6 +88,11 @@ yyjson_mut_val *cage_message_to_val(yyjson_mut_doc *doc, const cage_message *m) 
             yyjson_mut_obj_add_strcpy(doc, bo, "id", b->tool_call_id ? b->tool_call_id : "");
             yyjson_mut_obj_add_strcpy(doc, bo, "name", b->tool_name ? b->tool_name : "");
             yyjson_mut_obj_add_strcpy(doc, bo, "arguments", b->arguments ? b->arguments : "{}");
+            break;
+        case CAGE_BLOCK_IMAGE:
+            yyjson_mut_obj_add_strcpy(doc, bo, "type", "image");
+            yyjson_mut_obj_add_strcpy(doc, bo, "data", b->data ? b->data : "");
+            yyjson_mut_obj_add_strcpy(doc, bo, "mimeType", b->media_type ? b->media_type : "");
             break;
         }
     }

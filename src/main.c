@@ -13,6 +13,7 @@
 #include "agent.h"
 #include "config.h"
 #include "headless.h"
+#include "host.h"
 #include "resolve.h"
 #include "tool.h"
 
@@ -130,7 +131,8 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    cage_runtime *runtime = cage_runtime_new();
+    cage_runtime *runtime = cage_runtime_new(model.supports_images);
+    cage_hosts_register(runtime);
     cage_tool tool = cage_codemode_tool();
 
     signal(SIGINT, on_signal);

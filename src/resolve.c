@@ -27,6 +27,9 @@ int cage_resolve_model(const cage_config *cfg, cage_model *out, char **err) {
     memset(out, 0, sizeof *out);
     out->provider = cfg->provider;
     out->model = cfg->model;
+    // Model image-input capability is not catalogued yet; assume it. A model
+    // that rejects images surfaces the provider error as-is.
+    out->supports_images = true;
 
     if (strcmp(cfg->provider, "opencode-go") == 0) {
         out->base_url = "https://opencode.ai/zen/go/v1";

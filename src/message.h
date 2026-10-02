@@ -21,6 +21,7 @@ typedef enum {
     CAGE_BLOCK_TEXT,
     CAGE_BLOCK_THINKING,
     CAGE_BLOCK_TOOL_CALL,
+    CAGE_BLOCK_IMAGE,
 } cage_block_type;
 
 typedef struct {
@@ -29,6 +30,8 @@ typedef struct {
     char *tool_call_id;  // TOOL_CALL
     char *tool_name;     // TOOL_CALL
     char *arguments;     // TOOL_CALL, a JSON object string
+    char *media_type;    // IMAGE, e.g. "image/png"
+    char *data;          // IMAGE, base64
 } cage_block;
 
 typedef struct {
@@ -49,6 +52,9 @@ cage_message cage_message_tool(const char *tool_call_id, const char *text, bool 
 
 // Appends a zeroed block and returns it for the caller to fill.
 cage_block *cage_message_add_block(cage_message *m, cage_block_type type);
+
+// True when the message carries at least one image block.
+bool cage_message_has_image(const cage_message *m);
 
 void cage_message_free(cage_message *m);
 

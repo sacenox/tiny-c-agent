@@ -54,12 +54,6 @@ static void *xmalloc(size_t n) {
     return p;
 }
 
-// Hands the buffer's text to the writer and resets it.
-static void emit(cage_command_ctx *ctx, tui_buf *b) {
-    ctx->write(ctx->user, b->data ? buf_steal(b) : strdup(""));
-    buf_free(b);
-}
-
 static void emit_str(cage_command_ctx *ctx, const char *s) {
     ctx->write(ctx->user, strdup(s));
 }
@@ -145,34 +139,88 @@ static const char *first_model(const cage_config *cfg, const char *provider) {
     return NULL;
 }
 
-static void listed(cage_command_ctx *ctx, const char *label) {
-    emit_str(ctx, label);
+static void push_option(char ***ids, char ***labels, size_t *n,
+                        const char *id, const char *label) {
+    *ids = realloc(*ids, (*n + 1) * sizeof **ids);
+    *labels = realloc(*labels, (*n + 1) * sizeof **labels);
+    if (!*ids || !*labels) abort();
+    (*ids)[*n] = strdup(id);
+    (*labels)[*n] = strdup(label && label[0] ? label : id);
+    if (!(*ids)[*n] || !(*labels)[*n]) abort();
+    (*n)++;
+}
+
+size_t cage_choose_list(const cage_config *cfg, cage_choose what,
+                        const char *provider, char ***out_ids, char ***out_labels) {
+    char **ids = NULL, **labels = NULL;
+    size_t n = 0;
+
+    if (what == CAGE_CHOOSE_PROVIDER) {
+        for (size_t i = 0; i < sizeof BUILTINS / sizeof BUILTINS[0]; i++)
+            push_option(&ids, &labels, &n, BUILTINS[i].id, BUILTINS[i].name);
+        for (size_t i = 0; i < cfg->custom_providers_len; i++) {
+            const cage_provider *p = &cfg->custom_providers[i];
+            push_option(&ids, &labels, &n, p->id, p->name);
+        }
+    } else if (what == CAGE_CHOOSE_MODEL) {
+        const char *prov = provider ? provider : cfg->provider;
+        if (prov) {
+            const cage_provider *custom = find_custom(cfg, prov);
+            if (custom) {
+                for (size_t i = 0; i < custom->models_len; i++)
+                    push_option(&ids, &labels, &n, custom->models[i], custom->models[i]);
+            } else {
+                const char *canonical = cage_provider_canonical(prov);
+                for (size_t i = 0; i < cage_catalog_count(); i++) {
+                    const cage_model_info *e = cage_catalog_get(i);
+                    if (strcmp(e->provider, canonical) == 0)
+                        push_option(&ids, &labels, &n, e->id, e->name);
+                }
+            }
+        }
+    } else {
+        const cage_model_info *info = cfg->provider && cfg->model
+            ? cage_catalog_lookup(cage_provider_canonical(cfg->provider), cfg->model)
+            : NULL;
+        if (info) {
+            for (size_t i = 0; i < info->effort_len; i++) {
+                const char *v = strcmp(info->effort[i], "none") == 0 ? "off" : info->effort[i];
+                push_option(&ids, &labels, &n, v, v);
+            }
+        }
+    }
+
+    *out_ids = ids;
+    *out_labels = labels;
+    return n;
+}
+
+static const char *provider_name(const cage_config *cfg, const char *id) {
+    for (size_t i = 0; i < sizeof BUILTINS / sizeof BUILTINS[0]; i++)
+        if (strcmp(BUILTINS[i].id, id) == 0) return BUILTINS[i].name;
+    const cage_provider *p = find_custom(cfg, id);
+    if (p) return p->name ? p->name : p->id;
+    return id;
+}
+
+char *cage_choose_title(const cage_config *cfg, cage_choose what,
+                        const char *provider) {
+    if (what == CAGE_CHOOSE_PROVIDER) return strdup("Select a provider");
+    if (what == CAGE_CHOOSE_EFFORT) return strdup("Select a thinking level");
+    const char *prov = provider ? provider : cfg->provider;
+    if (!prov) return strdup("Select a model");
+    const char *name = provider_name(cfg, prov);
+    size_t n = strlen(name) + 32;
+    char *s = xmalloc(n);
+    snprintf(s, n, "Select a model for %s", name);
+    return s;
 }
 
 static void run_provider(cage_command_ctx *ctx, const char *args) {
     char *id = trimmed(args);
     if (id[0] == '\0') {
         free(id);
-        listed(ctx, "providers");
-        for (size_t i = 0; i < sizeof BUILTINS / sizeof BUILTINS[0]; i++) {
-            tui_buf b;
-            buf_init(&b);
-            buf_adds(&b, ctx->cfg->provider && strcmp(ctx->cfg->provider, BUILTINS[i].id) == 0 ? "* " : "  ");
-            buf_adds(&b, BUILTINS[i].id);
-            buf_adds(&b, "  ");
-            buf_adds(&b, BUILTINS[i].name);
-            emit(ctx, &b);
-        }
-        for (size_t i = 0; i < ctx->cfg->custom_providers_len; i++) {
-            const cage_provider *p = &ctx->cfg->custom_providers[i];
-            tui_buf b;
-            buf_init(&b);
-            buf_adds(&b, ctx->cfg->provider && strcmp(ctx->cfg->provider, p->id) == 0 ? "* " : "  ");
-            buf_adds(&b, p->id);
-            buf_adds(&b, "  ");
-            buf_adds(&b, p->name ? p->name : p->id);
-            emit(ctx, &b);
-        }
+        ctx->choose(ctx->user, CAGE_CHOOSE_PROVIDER);
         return;
     }
     if (!is_builtin(id) && !find_custom(ctx->cfg, id)) {
@@ -200,41 +248,11 @@ static void run_provider(cage_command_ctx *ctx, const char *args) {
     free(id);
 }
 
-static void list_models(cage_command_ctx *ctx) {
-    const char *provider = ctx->cfg->provider ? ctx->cfg->provider : "";
-    const cage_provider *custom = find_custom(ctx->cfg, provider);
-    if (custom) {
-        for (size_t i = 0; i < custom->models_len; i++) {
-            tui_buf b;
-            buf_init(&b);
-            buf_adds(&b, ctx->cfg->model && strcmp(ctx->cfg->model, custom->models[i]) == 0 ? "* " : "  ");
-            buf_adds(&b, custom->models[i]);
-            emit(ctx, &b);
-        }
-        return;
-    }
-    const char *canonical = cage_provider_canonical(provider);
-    for (size_t i = 0; i < cage_catalog_count(); i++) {
-        const cage_model_info *e = cage_catalog_get(i);
-        if (strcmp(e->provider, canonical) != 0) continue;
-        tui_buf b;
-        buf_init(&b);
-        buf_adds(&b, ctx->cfg->model && strcmp(ctx->cfg->model, e->id) == 0 ? "* " : "  ");
-        buf_adds(&b, e->id);
-        buf_adds(&b, "  ");
-        buf_adds(&b, e->name);
-        emit(ctx, &b);
-    }
-}
-
 static void run_model(cage_command_ctx *ctx, const char *args) {
     char *id = trimmed(args);
     if (id[0] == '\0') {
         free(id);
-        char label[256];
-        snprintf(label, sizeof label, "models for %s", ctx->cfg->provider ? ctx->cfg->provider : "");
-        listed(ctx, label);
-        list_models(ctx);
+        ctx->choose(ctx->user, CAGE_CHOOSE_MODEL);
         return;
     }
     char *err = NULL;
@@ -251,22 +269,7 @@ static void run_thinking(cage_command_ctx *ctx, const char *args) {
     char *level = trimmed(args);
     if (level[0] == '\0') {
         free(level);
-        const cage_model_info *info = ctx->cfg->provider && ctx->cfg->model
-            ? cage_catalog_lookup(cage_provider_canonical(ctx->cfg->provider), ctx->cfg->model)
-            : NULL;
-        if (!info || info->effort_len == 0) {
-            emit_str(ctx, "no configurable effort for this model");
-            return;
-        }
-        listed(ctx, "effort");
-        for (size_t i = 0; i < info->effort_len; i++) {
-            const char *v = strcmp(info->effort[i], "none") == 0 ? "off" : info->effort[i];
-            tui_buf b;
-            buf_init(&b);
-            buf_adds(&b, "  ");
-            buf_adds(&b, v);
-            emit(ctx, &b);
-        }
+        ctx->choose(ctx->user, CAGE_CHOOSE_EFFORT);
         return;
     }
     bool valid = false;

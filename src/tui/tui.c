@@ -107,7 +107,6 @@ typedef struct {
     const cage_tui_config *c;
     cage_model model;
     cage_agent agent;
-    cage_tool tool;
     cage_session *session;
 
     int in_fd;
@@ -154,6 +153,16 @@ typedef struct {
     int frame;
     char *streamed;
     bool closed;
+
+    // A pending command choice: the next submitted line picks one of the
+    // numbered options. `choice_provider` carries the provider just chosen
+    // into the chained model list.
+    bool choice_active;
+    cage_choose choice_kind;
+    char *choice_provider;
+    char **choice_ids;
+    char **choice_labels;
+    size_t choice_n;
 
     pthread_mutex_t lock;
     pthread_cond_t cv;
@@ -496,21 +505,25 @@ static void flush_calls(tui *t) {
 // ---- call line -------------------------------------------------------------
 
 static char *call_summary(const char *name, const char *arguments) {
-    // The codemode tool's only argument is `code`; summarize by first line.
-    (void)name;
     yyjson_doc *doc = yyjson_read(arguments ? arguments : "{}", arguments ? strlen(arguments) : 2, 0);
-    const char *code = NULL;
-    if (doc) {
-        yyjson_val *c = yyjson_obj_get(yyjson_doc_get_root(doc), "code");
-        if (yyjson_is_str(c)) code = yyjson_get_str(c);
+    const char *key = (strcmp(name, "bash") == 0)  ? "command"
+                      : (strcmp(name, "edit") == 0 || strcmp(name, "read") == 0) ? "path"
+                                                                                 : NULL;
+    const char *value = NULL;
+    if (doc && key) {
+        yyjson_val *v = yyjson_obj_get(yyjson_doc_get_root(doc), key);
+        if (yyjson_is_str(v)) value = yyjson_get_str(v);
     }
     tui_buf b;
     buf_init(&b);
-    if (code) {
-        // First line only, whitespace collapsed.
-        for (const char *p = code; *p && *p != '\n'; p++) {
-            char c = *p;
-            buf_addc(&b, (c == '\t') ? ' ' : c);
+    if (value) {
+        // Newlines and tabs collapse to a single space.
+        for (const char *p = value; *p; p++) {
+            if (*p == '\n' || *p == '\t') {
+                if (b.len > 0 && b.data[b.len - 1] != ' ') buf_addc(&b, ' ');
+            } else {
+                buf_addc(&b, *p);
+            }
         }
     } else {
         buf_adds(&b, arguments ? arguments : "");
@@ -947,6 +960,7 @@ static void command_new_session(void *user) {
     free(t->agent.messages);
     t->agent.messages = NULL;
     t->agent.messages_len = 0;
+    t->ctx_used = 0;
 }
 
 // The one-line model banner: "cage · provider/model · effort".
@@ -1008,7 +1022,7 @@ static int command_apply(void *user, const char *provider, const char *model,
     if (cage_resolve_model(cfg, &t->model, err) != 0) return -1;
     t->agent.model = t->model;
     t->context_window = window_for(cfg->provider, cfg->model);
-    if (t->c->runtime) cage_runtime_set_supports_images(t->c->runtime, t->model.supports_images);
+    t->agent.tools = cage_tools(t->model.supports_images, &t->agent.tools_len);
 
     char *line = model_line(t);
     t->separator = true;
@@ -1016,11 +1030,147 @@ static int command_apply(void *user, const char *provider, const char *model,
     return 0;
 }
 
+// Releases the pending choice and its options.
+static void free_choice(tui *t) {
+    for (size_t i = 0; i < t->choice_n; i++) {
+        free(t->choice_ids[i]);
+        free(t->choice_labels[i]);
+    }
+    free(t->choice_ids);
+    free(t->choice_labels);
+    free(t->choice_provider);
+    t->choice_ids = NULL;
+    t->choice_labels = NULL;
+    t->choice_provider = NULL;
+    t->choice_n = 0;
+    t->choice_active = false;
+}
+
+// Commits one red line, for errors the choice flow reports.
+static void command_error(tui *t, const char *msg) {
+    t->separator = true;
+    cage_body_line bl = {xstrdup(msg), fg_red, NULL};
+    commit_lines(t, &bl, 1);
+    free(bl.text);
+    t->separator = true;
+}
+
+// Presents the options for `what` as a numbered list and arms the choice.
+// `provider` overrides the config provider for a model list.
+static void start_choose(tui *t, cage_choose what, const char *provider) {
+    free_choice(t);
+    char **ids = NULL, **labels = NULL;
+    size_t n = cage_choose_list(t->c->cfg, what, provider, &ids, &labels);
+    if (n == 0) {
+        const char *msg = what == CAGE_CHOOSE_MODEL ? "! select a provider first"
+                          : what == CAGE_CHOOSE_EFFORT ? "! no configurable effort for this model"
+                                                       : "! no providers configured";
+        command_error(t, msg);
+        return;
+    }
+    t->choice_active = true;
+    t->choice_kind = what;
+    t->choice_provider = provider ? xstrdup(provider) : NULL;
+    t->choice_ids = ids;
+    t->choice_labels = labels;
+    t->choice_n = n;
+
+    // The heading and options are one block, so no blank line separates them.
+    char *title = cage_choose_title(t->c->cfg, what, provider);
+    size_t total = n + 1;
+    cage_body_line *lines = xmalloc(total * sizeof *lines);
+    lines[0] = (cage_body_line){title, NULL, NULL};
+    for (size_t i = 0; i < n; i++) {
+        tui_buf b;
+        buf_init(&b);
+        buf_addf(&b, "  %zu. ", i + 1);
+        buf_adds(&b, labels[i]);
+        lines[i + 1] = (cage_body_line){b.data ? buf_steal(&b) : xstrdup(""), NULL, NULL};
+        buf_free(&b);
+    }
+    t->separator = true;
+    commit_lines(t, lines, total);
+    for (size_t i = 0; i < total; i++) free(lines[i].text);
+    free(lines);
+    t->separator = true;
+}
+
+// Turns the submitted line into the pending choice: a 1-based index, an id, or
+// a label. An invalid line reports and clears the choice.
+static void resolve_choice(tui *t, const char *text) {
+    size_t n = t->choice_n;
+    const char *p = text;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    size_t len = strlen(p);
+    while (len > 0 && (p[len - 1] == ' ' || p[len - 1] == '\t' || p[len - 1] == '\n' || p[len - 1] == '\r'))
+        len--;
+    char *word = xmalloc(len + 1);
+    memcpy(word, p, len);
+    word[len] = '\0';
+
+    const char *chosen = NULL;
+    char *end = NULL;
+    long idx = strtol(word, &end, 10);
+    if (word[0] != '\0' && *end == '\0' && idx >= 1 && (size_t)idx <= n)
+        chosen = t->choice_ids[idx - 1];
+    if (!chosen) {
+        for (size_t i = 0; i < n; i++) {
+            if (strcmp(word, t->choice_ids[i]) == 0 || strcmp(word, t->choice_labels[i]) == 0) {
+                chosen = t->choice_ids[i];
+                break;
+            }
+        }
+    }
+    if (!chosen) {
+        size_t ml = strlen(word) + 32;
+        char *msg = xmalloc(ml);
+        snprintf(msg, ml, "! invalid selection: %s", word);
+        command_error(t, msg);
+        free(msg);
+        free(word);
+        free_choice(t);
+        return;
+    }
+
+    cage_choose kind = t->choice_kind;
+    char *id = xstrdup(chosen);
+    char *provider = t->choice_provider ? xstrdup(t->choice_provider) : NULL;
+    free(word);
+    free_choice(t);
+
+    if (kind == CAGE_CHOOSE_PROVIDER) {
+        start_choose(t, CAGE_CHOOSE_MODEL, id);
+        free(id);
+        return;
+    }
+
+    char *err = NULL;
+    int rc = kind == CAGE_CHOOSE_MODEL
+        ? command_apply(t, provider, id, NULL, &err)
+        : command_apply(t, NULL, NULL, id, &err);
+    if (rc != 0) {
+        const char *detail = err ? err : "cannot apply the selection";
+        size_t ml = strlen(detail) + 4;
+        char *msg = xmalloc(ml);
+        snprintf(msg, ml, "! %s", detail);
+        command_error(t, msg);
+        free(msg);
+        free(err);
+    }
+    free(provider);
+    free(id);
+}
+
+static void command_choose(void *user, cage_choose what) {
+    start_choose(user, what, NULL);
+}
+
 static void run_command(tui *t, const cage_command *cmd, const char *args) {
     cage_command_ctx ctx = {
         .user = t,
         .write = command_write,
         .new_session = command_new_session,
+        .choose = command_choose,
         .cfg = t->c->cfg,
         .apply = command_apply,
     };
@@ -1103,6 +1253,13 @@ static void submit(tui *t) {
         free(text);
         return;
     }
+    if (t->choice_active) {
+        cage_editor_clear(t->editor);
+        resolve_choice(t, text);
+        free(text);
+        tui_render_locked(t);
+        return;
+    }
     size_t len = strlen(text);
     size_t s = 0;
     while (s < len && (text[s] == ' ' || text[s] == '\t' || text[s] == '\n')) s++;
@@ -1159,6 +1316,9 @@ static void handle_key(tui *t, const cage_key *key) {
         if (t->active) {
             t->cancel = true;
             pthread_cond_broadcast(&t->cv);
+        } else if (t->choice_active) {
+            free_choice(t);
+            command_error(t, "! cancelled");
         } else if (cage_editor_text(t->editor)[0] != '\0') {
             cage_editor_clear(t->editor);
         }
@@ -1259,7 +1419,6 @@ int cage_tui_run(const cage_tui_config *c) {
     t.parser = cage_key_parser_new();
 
     cage_theme_use(c->cfg->theme);
-    t.tool = cage_codemode_tool();
 
     t.model = c->model;
     t.context_window = window_for(c->model.provider, c->model.model);
@@ -1279,12 +1438,14 @@ int cage_tui_run(const cage_tui_config *c) {
         return 1;
     }
 
+    size_t tools_len;
+    const cage_tool *tools = cage_tools(t.model.supports_images, &tools_len);
+
     t.agent = (cage_agent){
         .model = t.model,
         .system_prompt = c->resources ? c->resources->system_prompt : "",
-        .tools = &t.tool,
-        .tools_len = 1,
-        .runtime = c->runtime,
+        .tools = tools,
+        .tools_len = tools_len,
         .session = t.session,
         .on_event = on_event,
         .user = &t,
@@ -1397,6 +1558,7 @@ int cage_tui_run(const cage_tui_config *c) {
     cage_tailstream_free(&t.activity);
     for (size_t i = 0; i < t.pending_calls.n; i++) free(t.pending_calls.v[i].text);
     free(t.pending_calls.v);
+    free_choice(&t);
     free(t.detail);
     free(t.writing_tool);
     free(t.streamed);

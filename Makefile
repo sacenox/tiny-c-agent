@@ -28,7 +28,7 @@ BASE     := -std=$(STD) $(OPT) -pthread
 
 CPPFLAGS += -D_GNU_SOURCE -Isrc -I$(TSJSON)/src -MMD -MP
 CFLAGS   += $(BASE) $(WARN) $(shell pkg-config --cflags $(PKGS))
-LDLIBS   += $(shell pkg-config --libs $(PKGS)) -lqjs -pthread
+LDLIBS   += $(shell pkg-config --libs $(PKGS)) -pthread
 
 .PHONY: all deps catalog run clean
 all: $(BIN)
@@ -58,7 +58,6 @@ deps:
 	    printf 'MISSING  %s\n' "$$p"; \
 	  fi; \
 	done
-	@if [ -f /usr/include/quickjs.h ]; then echo 'ok       quickjs'; else echo 'MISSING  quickjs'; fi
 
 run: all
 	./$(BIN)

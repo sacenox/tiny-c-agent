@@ -161,46 +161,24 @@ static void on_tool_output(const char *chunk, void *user) {
 }
 
 static cage_tool_result run_tool(cage_agent *a, turn_state *st, const cage_block *b) {
-    cage_tool_result r = {0};
-    if (!a->runtime) {
-        r.text = xstrdup("codemode: no runtime configured");
-        r.is_error = true;
-        return r;
-    }
-    if (!b->tool_name || strcmp(b->tool_name, cage_codemode_tool().name) != 0) {
-        char msg[256];
-        snprintf(msg, sizeof msg, "codemode: unknown tool \"%s\"", b->tool_name ? b->tool_name : "");
-        r.text = xstrdup(msg);
-        r.is_error = true;
-        return r;
-    }
-
+    const char *name = b->tool_name ? b->tool_name : "";
     const char *args = b->arguments ? b->arguments : "{}";
-    yyjson_doc *doc = yyjson_read(args, strlen(args), 0);
-    const char *code = NULL;
-    if (doc) {
-        yyjson_val *c = yyjson_obj_get(yyjson_doc_get_root(doc), "code");
-        if (yyjson_is_str(c)) code = yyjson_get_str(c);
-    }
-    if (!code) {
-        yyjson_doc_free(doc);
-        r.text = xstrdup("codemode: missing \"code\" argument");
-        r.is_error = true;
-        return r;
-    }
 
-    // The run may write anywhere under the working directory, so a diff of the
+    // Only the tools that can write get a tree diff around them.
+    if (strcmp(name, "edit") != 0 && strcmp(name, "bash") != 0)
+        return cage_tool_run(name, args, a->model.supports_images, on_tool_output, st, a->cancel);
+
+    // The tool may write anywhere under the working directory, so a diff of the
     // tree around it is the only way to report what changed.
     struct timespec start;
     clock_gettime(CLOCK_REALTIME, &start);
     struct cage_snapshot *before = cage_snapshot_capture(NULL);
-    r = cage_runtime_run(a->runtime, code, on_tool_output, st, a->cancel);
+    cage_tool_result r =
+        cage_tool_run(name, args, a->model.supports_images, on_tool_output, st, a->cancel);
     struct cage_snapshot *after = cage_snapshot_capture(&start);
     r.diffs = cage_snapshot_diff(before, after, &r.diffs_len);
     cage_snapshot_free(before);
     cage_snapshot_free(after);
-
-    yyjson_doc_free(doc);
     return r;
 }
 

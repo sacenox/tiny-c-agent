@@ -9,7 +9,6 @@
 #include "message.h"
 #include "provider.h"
 #include "session.h"
-#include "tool.h"
 
 typedef struct {
     // Model and request shape.
@@ -17,9 +16,6 @@ typedef struct {
     const char *system_prompt;
     const cage_tool *tools;
     size_t tools_len;
-
-    // Tool execution. Required once the model asks for a tool.
-    cage_runtime *runtime;
 
     // Persistence. NULL disables session logging.
     cage_session *session;

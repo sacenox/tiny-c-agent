@@ -1,6 +1,6 @@
-// The read, edit, and bash capabilities, exposed as codemode globals.
+// The read, edit, and bash tools.
 
-#include "host.h"
+#include "tool.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -63,34 +63,21 @@ static void buf_addz(buf *b, const char *s) {
     buf_add(b, s, strlen(s));
 }
 
-static cage_host_result ok_json(char *json) {
-    return (cage_host_result){.json = json};
-}
-
-static cage_host_result err(const char *fmt, ...) {
-    char detail[512];
+static void set_error(cage_tool_result *res, const char *fmt, ...) {
+    char detail[1024];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(detail, sizeof detail, fmt, ap);
     va_end(ap);
-    return (cage_host_result){.error = xstrdup(detail)};
+    res->text = xstrdup(detail);
+    res->is_error = true;
 }
 
-// A JSON string value; `s` must be valid UTF-8 and NUL-terminated.
-static char *json_string(const char *s) {
-    yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
-    yyjson_mut_doc_set_root(doc, yyjson_mut_strcpy(doc, s));
-    char *out = yyjson_mut_write(doc, 0, NULL);
-    yyjson_mut_doc_free(doc);
-    return out;
-}
-
-// nth argument of the JSON array the runtime passes to a host function.
-static yyjson_val *arg_at(yyjson_doc *doc, size_t i) {
+// The named member of `args` when it is a string, else NULL.
+static const char *arg_str(yyjson_doc *doc, const char *key) {
     if (!doc) return NULL;
-    yyjson_val *root = yyjson_doc_get_root(doc);
-    if (!yyjson_is_arr(root)) return NULL;
-    return yyjson_arr_get(root, i);
+    yyjson_val *v = yyjson_obj_get(yyjson_doc_get_root(doc), key);
+    return yyjson_is_str(v) ? yyjson_get_str(v) : NULL;
 }
 
 // ---- UTF-8 ----------------------------------------------------------------
@@ -253,56 +240,56 @@ static const char *image_mime(const char *path) {
 
 // ---- read -----------------------------------------------------------------
 
-static cage_host_result host_read(const char *args_json, void *user) {
-    cage_runtime *rt = user;
-    yyjson_doc *doc = yyjson_read(args_json, strlen(args_json), 0);
-    yyjson_val *a = arg_at(doc, 0);
-    if (!yyjson_is_str(a)) {
+static void tool_read(const char *args, bool supports_images, cage_tool_result *res) {
+    yyjson_doc *doc = yyjson_read(args, strlen(args), 0);
+    const char *path = arg_str(doc, "path");
+    if (!path) {
+        set_error(res, "read failed: path must be a string");
         yyjson_doc_free(doc);
-        return err("read: path must be a string");
+        return;
     }
-    const char *path = yyjson_get_str(a);
 
     buf data = {0};
     if (slurp(path, &data) != 0) {
-        cage_host_result r = err("read failed: %s: %s", path, strerror(errno));
+        set_error(res, "read failed: %s: %s", path, strerror(errno));
         free(data.data);
         yyjson_doc_free(doc);
-        return r;
+        return;
     }
 
     const char *mime = image_mime(path);
     if (mime) {
-        if (!cage_runtime_supports_images(rt)) {
-            cage_host_result r = err("read failed: %s is an image and the current model does not accept image input", path);
+        if (!supports_images) {
+            set_error(res, "read failed: %s is an image and the current model does not accept image input", path);
             free(data.data);
             yyjson_doc_free(doc);
-            return r;
+            return;
         }
         char *b64 = base64_encode((const unsigned char *)data.data, data.len);
         if (strlen(b64) > MAX_IMAGE_B64) {
-            cage_host_result r = err("read failed: %s encodes to %zu bytes, over the %u byte image limit",
-                                     path, strlen(b64), MAX_IMAGE_B64);
+            set_error(res, "read failed: %s encodes to %zu bytes, over the %u byte image limit",
+                      path, strlen(b64), MAX_IMAGE_B64);
             free(b64);
             free(data.data);
             yyjson_doc_free(doc);
-            return r;
+            return;
         }
-        char msg[1024];
-        snprintf(msg, sizeof msg, "read %s (%s, %zu bytes)", path, mime, data.len);
-        cage_runtime_add_image(rt, mime, b64);
-        free(b64);
+        res->text = xmalloc(strlen(path) + strlen(mime) + 64);
+        sprintf(res->text, "read %s (%s, %zu bytes)", path, mime, data.len);
+        res->images = xmalloc(sizeof *res->images);
+        res->images[0] = (cage_image){.media_type = xstrdup(mime), .data = b64};
+        res->images_len = 1;
         free(data.data);
         yyjson_doc_free(doc);
-        return ok_json(json_string(msg));
+        return;
     }
 
     size_t sniff = data.len < 8000 ? data.len : 8000;
     if (sniff > 0 && memchr(data.data, 0, sniff)) {
-        cage_host_result r = err("read failed: %s is binary; use bash (file, xxd)", path);
+        set_error(res, "read failed: %s is binary; use bash (file, xxd)", path);
         free(data.data);
         yyjson_doc_free(doc);
-        return r;
+        return;
     }
 
     size_t take = data.len > MAX_TEXT ? MAX_TEXT : data.len;
@@ -318,18 +305,21 @@ static cage_host_result host_read(const char *args_json, void *user) {
     }
     free(data.data);
     yyjson_doc_free(doc);
-    return ok_json(json_string(clean));
+    res->text = clean;
 }
 
 // ---- edit -----------------------------------------------------------------
 
-static cage_host_result host_edit(const char *args_json, void *user) {
-    (void)user;
-    yyjson_doc *doc = yyjson_read(args_json, strlen(args_json), 0);
-    yyjson_val *pa = arg_at(doc, 0), *oa = arg_at(doc, 1), *na = arg_at(doc, 2);
+static void tool_edit(const char *args, cage_tool_result *res) {
+    yyjson_doc *doc = yyjson_read(args, strlen(args), 0);
+    yyjson_val *root = doc ? yyjson_doc_get_root(doc) : NULL;
+    yyjson_val *pa = root ? yyjson_obj_get(root, "path") : NULL;
+    yyjson_val *oa = root ? yyjson_obj_get(root, "oldText") : NULL;
+    yyjson_val *na = root ? yyjson_obj_get(root, "newText") : NULL;
     if (!yyjson_is_str(pa) || !yyjson_is_str(oa) || !yyjson_is_str(na)) {
+        set_error(res, "edit failed: path, oldText and newText must be strings");
         yyjson_doc_free(doc);
-        return err("edit: path, oldText and newText must be strings");
+        return;
     }
     const char *path = yyjson_get_str(pa);
     const char *old = yyjson_get_str(oa);
@@ -339,42 +329,42 @@ static cage_host_result host_edit(const char *args_json, void *user) {
 
     if (old_len == 0) {
         if (access(path, F_OK) == 0) {
-            cage_host_result r = err("edit failed: %s already exists", path);
+            set_error(res, "edit failed: %s already exists", path);
             yyjson_doc_free(doc);
-            return r;
+            return;
         }
         if (spill(path, nw, new_len) != 0) {
-            cage_host_result r = err("edit failed: %s: %s", path, strerror(errno));
+            set_error(res, "edit failed: %s: %s", path, strerror(errno));
             yyjson_doc_free(doc);
-            return r;
+            return;
         }
-        char msg[1024];
-        snprintf(msg, sizeof msg, "created %s", path);
+        res->text = xmalloc(strlen(path) + 16);
+        sprintf(res->text, "created %s", path);
         yyjson_doc_free(doc);
-        return ok_json(json_string(msg));
+        return;
     }
 
     buf data = {0};
     if (slurp(path, &data) != 0) {
-        cage_host_result r = err("edit failed: %s: %s", path, strerror(errno));
+        set_error(res, "edit failed: %s: %s", path, strerror(errno));
         free(data.data);
         yyjson_doc_free(doc);
-        return r;
+        return;
     }
 
     size_t at;
     if (!find_sub(data.data, data.len, old, old_len, &at)) {
-        cage_host_result r = err("edit failed: oldText not found in %s", path);
+        set_error(res, "edit failed: oldText not found in %s", path);
         free(data.data);
         yyjson_doc_free(doc);
-        return r;
+        return;
     }
     size_t second;
     if (find_sub(data.data + at + 1, data.len - at - 1, old, old_len, &second)) {
-        cage_host_result r = err("edit failed: oldText matches more than once in %s", path);
+        set_error(res, "edit failed: oldText matches more than once in %s", path);
         free(data.data);
         yyjson_doc_free(doc);
-        return r;
+        return;
     }
 
     buf out = {0};
@@ -382,19 +372,18 @@ static cage_host_result host_edit(const char *args_json, void *user) {
     buf_add(&out, nw, new_len);
     buf_add(&out, data.data + at + old_len, data.len - at - old_len);
     if (spill(path, out.data, out.len) != 0) {
-        cage_host_result r = err("edit failed: %s: %s", path, strerror(errno));
+        set_error(res, "edit failed: %s: %s", path, strerror(errno));
         free(out.data);
         free(data.data);
         yyjson_doc_free(doc);
-        return r;
+        return;
     }
 
-    char msg[1024];
-    snprintf(msg, sizeof msg, "edited %s", path);
+    res->text = xmalloc(strlen(path) + 16);
+    sprintf(res->text, "edited %s", path);
     free(out.data);
     free(data.data);
     yyjson_doc_free(doc);
-    return ok_json(json_string(msg));
 }
 
 // ---- bash -----------------------------------------------------------------
@@ -408,29 +397,29 @@ static void keep_tail(buf *t, bool *truncated) {
     *truncated = true;
 }
 
-static cage_host_result host_bash(const char *args_json, void *user) {
-    cage_runtime *rt = user;
-    yyjson_doc *doc = yyjson_read(args_json, strlen(args_json), 0);
-    yyjson_val *a = arg_at(doc, 0);
-    if (!yyjson_is_str(a)) {
+static void tool_bash(const char *args, cage_tool_output_fn out, void *user,
+                      const volatile bool *cancel, cage_tool_result *res) {
+    yyjson_doc *doc = yyjson_read(args, strlen(args), 0);
+    const char *command = arg_str(doc, "command");
+    if (!command) {
+        set_error(res, "bash: command must be a string");
         yyjson_doc_free(doc);
-        return err("bash: command must be a string");
+        return;
     }
-    const char *command = yyjson_get_str(a);
 
     int pipefd[2];
     if (pipe(pipefd) != 0) {
-        cage_host_result r = err("bash: %s", strerror(errno));
+        set_error(res, "bash: %s", strerror(errno));
         yyjson_doc_free(doc);
-        return r;
+        return;
     }
     pid_t pid = fork();
     if (pid < 0) {
         close(pipefd[0]);
         close(pipefd[1]);
-        cage_host_result r = err("bash: fork: %s", strerror(errno));
+        set_error(res, "bash: fork: %s", strerror(errno));
         yyjson_doc_free(doc);
-        return r;
+        return;
     }
     if (pid == 0) {
         setpgid(0, 0);
@@ -454,7 +443,7 @@ static cage_host_result host_bash(const char *args_json, void *user) {
 
     char chunk[8192];
     for (;;) {
-        if (cage_runtime_cancelled(rt)) {
+        if (cancel && *cancel) {
             cancelled = true;
             break;
         }
@@ -472,7 +461,7 @@ static cage_host_result host_bash(const char *args_json, void *user) {
         }
         if (n == 0) break;
         chunk[n] = '\0';
-        cage_runtime_output(rt, chunk);
+        if (out) out(chunk, user);
         if (head.len < MAX_HEAD) {
             size_t take = MAX_HEAD - head.len;
             if ((size_t)n < take) take = (size_t)n;
@@ -519,23 +508,72 @@ static cage_host_result host_bash(const char *args_json, void *user) {
     buf_add(&body, tail.data ? tail.data : "", tail.len);
 
     char *clean = utf8_clean(body.data ? body.data : "", body.len);
-    yyjson_mut_doc *jd = yyjson_mut_doc_new(NULL);
-    yyjson_mut_val *o = yyjson_mut_obj(jd);
-    yyjson_mut_doc_set_root(jd, o);
-    yyjson_mut_obj_add_strcpy(jd, o, "output", clean);
-    yyjson_mut_obj_add_int(jd, o, "exitCode", code);
-    char *json = yyjson_mut_write(jd, 0, NULL);
-    yyjson_mut_doc_free(jd);
+    buf text = {0};
+    buf_addz(&text, clean);
+    if (text.len > 0 && text.data[text.len - 1] != '\n') buf_addz(&text, "\n");
+    char code_line[32];
+    snprintf(code_line, sizeof code_line, "exit code: %d", code);
+    buf_addz(&text, code_line);
+    res->text = text.data;
+    res->is_error = code != 0;
     free(clean);
     free(body.data);
     free(head.data);
     free(tail.data);
     yyjson_doc_free(doc);
-    return ok_json(json);
 }
 
-void cage_hosts_register(cage_runtime *rt) {
-    cage_runtime_register(rt, "read", host_read, rt);
-    cage_runtime_register(rt, "edit", host_edit, rt);
-    cage_runtime_register(rt, "bash", host_bash, rt);
+// ---- the toolset ----------------------------------------------------------
+
+#define READ_DESCRIPTION \
+    "Read a file. Returns its text. Prefer bash for search, ranges, or binary files."
+#define READ_IMAGE_DESCRIPTION \
+    "Read a file. Returns its text, or the image itself when the file is a png, jpg, or webp. " \
+    "Prefer bash for search, ranges, or binary files."
+#define EDIT_DESCRIPTION \
+    "Edit a file by exact text replacement. oldText must occur exactly once. " \
+    "With empty oldText, create a new file (fails if it exists)."
+#define BASH_DESCRIPTION "Run a bash command in the current working directory."
+
+#define READ_PARAMS \
+    "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"File path\"}}," \
+    "\"required\":[\"path\"],\"additionalProperties\":false}"
+#define EDIT_PARAMS \
+    "{\"type\":\"object\",\"properties\":{" \
+    "\"path\":{\"type\":\"string\",\"description\":\"File path\"}," \
+    "\"oldText\":{\"type\":\"string\",\"description\":\"Exact text to replace; empty to create a file\"}," \
+    "\"newText\":{\"type\":\"string\",\"description\":\"Replacement text\"}}," \
+    "\"required\":[\"path\",\"oldText\",\"newText\"],\"additionalProperties\":false}"
+#define BASH_PARAMS \
+    "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\",\"description\":\"Command to run\"}}," \
+    "\"required\":[\"command\"],\"additionalProperties\":false}"
+
+const cage_tool *cage_tools(bool supports_images, size_t *len) {
+    static const cage_tool plain[] = {
+        {"read", READ_DESCRIPTION, READ_PARAMS},
+        {"edit", EDIT_DESCRIPTION, EDIT_PARAMS},
+        {"bash", BASH_DESCRIPTION, BASH_PARAMS},
+    };
+    static const cage_tool images[] = {
+        {"read", READ_IMAGE_DESCRIPTION, READ_PARAMS},
+        {"edit", EDIT_DESCRIPTION, EDIT_PARAMS},
+        {"bash", BASH_DESCRIPTION, BASH_PARAMS},
+    };
+    *len = 3;
+    return supports_images ? images : plain;
+}
+
+cage_tool_result cage_tool_run(const char *name, const char *args, bool supports_images,
+                               cage_tool_output_fn out, void *user, const volatile bool *cancel) {
+    cage_tool_result res = {0};
+    if (name && strcmp(name, "read") == 0) {
+        tool_read(args, supports_images, &res);
+    } else if (name && strcmp(name, "edit") == 0) {
+        tool_edit(args, &res);
+    } else if (name && strcmp(name, "bash") == 0) {
+        tool_bash(args, out, user, cancel, &res);
+    } else {
+        set_error(&res, "unknown tool: %s", name ? name : "");
+    }
+    return res;
 }

@@ -16,7 +16,6 @@ typedef struct {
     cage_config *cfg;
     cage_model model;
     const cage_resources *resources;
-    cage_runtime *runtime;
     const char *cwd;
 } cage_tui_config;
 

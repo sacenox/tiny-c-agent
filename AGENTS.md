@@ -30,7 +30,7 @@ A fast, minimal and config first agent for your terminal.
   the turn.
 - The loop has no compaction, no retries, and no meta-messages between steps.
   Provider errors surface as-is, never masked or summarized.
-- Single codemode-style LLM tool, exectutes the script in a JS environment.
+- Three LLM tools, matching mini-coder: `read`, `edit`, and `bash`.
 - Interruption: ESC politely pauses at the next step boundary; Ctrl+C cancels the
   turn (abort the request, kill the tool's process group, persist the aborted
   message); Ctrl+C (or CTRL+D) exits on an empty draft. Completed side effects are never

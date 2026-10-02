@@ -1,4 +1,4 @@
-// cage working-tree diffs: what a codemode run changed on disk.
+// cage working-tree diffs: what a tool run changed on disk.
 //
 // The changes are display-only. A snapshot records the working tree; diffing
 // the snapshots around a run yields the changed files, each a unified patch or

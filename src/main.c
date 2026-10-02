@@ -13,7 +13,6 @@
 #include "agent.h"
 #include "config.h"
 #include "headless.h"
-#include "host.h"
 #include "resolve.h"
 #include "resources.h"
 #include "tool.h"
@@ -111,8 +110,8 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    cage_runtime *runtime = cage_runtime_new(model.supports_images);
-    cage_hosts_register(runtime);
+    size_t tools_len;
+    const cage_tool *tools = cage_tools(model.supports_images, &tools_len);
 
     if (!print_mode) {
         // The TUI owns the terminal and its own signal handlers.
@@ -120,11 +119,9 @@ int main(int argc, char **argv) {
             .cfg = cfg,
             .model = model,
             .resources = resources,
-            .runtime = runtime,
             .cwd = cwd,
         };
         int code = cage_tui_run(&tc);
-        cage_runtime_free(runtime);
         cage_resources_free(resources);
         cage_config_free(cfg);
         free(err);
@@ -139,8 +136,6 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    cage_tool tool = cage_codemode_tool();
-
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 
@@ -150,10 +145,9 @@ int main(int argc, char **argv) {
     cage_agent a = {0};
     a.model = model;
     a.system_prompt = resources->system_prompt;
-    a.tools = &tool;
-    a.tools_len = 1;
+    a.tools = tools;
+    a.tools_len = tools_len;
 
-    a.runtime = runtime;
     a.session = session;
     a.on_event = cage_headless_event;
     a.user = &head;
@@ -165,7 +159,6 @@ int main(int argc, char **argv) {
 
     cage_agent_free(&a);
     cage_headless_free(&head);
-    cage_runtime_free(runtime);
     cage_session_close(session);
     cage_resources_free(resources);
     cage_config_free(cfg);

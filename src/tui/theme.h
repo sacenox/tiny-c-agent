@@ -9,7 +9,7 @@
 
 #include <stdbool.h>
 
-#include "buf.h"
+#include "util.h"
 #include "config.h"
 
 typedef struct {

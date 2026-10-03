@@ -11,44 +11,13 @@
 #include <yyjson.h>
 
 #include "diff.h"
+#include "util.h"
 
 // Per-turn state passed to the provider and tool callbacks.
 typedef struct {
     cage_agent *a;
     bool streaming;
 } turn_state;
-
-static void *xmalloc(size_t n) {
-    void *p = malloc(n);
-    if (!p) abort();
-    return p;
-}
-
-static char *xstrdup(const char *s) {
-    size_t n = strlen(s) + 1;
-    char *p = xmalloc(n);
-    memcpy(p, s, n);
-    return p;
-}
-
-typedef struct {
-    char *data;
-    size_t len;
-    size_t cap;
-} buf;
-
-static void buf_add(buf *b, const char *p, size_t n) {
-    if (b->len + n + 1 > b->cap) {
-        size_t cap = b->cap ? b->cap : 64;
-        while (cap < b->len + n + 1) cap *= 2;
-        b->data = realloc(b->data, cap);
-        if (!b->data) abort();
-        b->cap = cap;
-    }
-    memcpy(b->data + b->len, p, n);
-    b->len += n;
-    b->data[b->len] = '\0';
-}
 
 // ---- event helpers --------------------------------------------------------
 
@@ -265,7 +234,7 @@ void cage_agent_turn(cage_agent *a, const char *input) {
         }
 
         // Steering is held until every result of this assistant turn has landed.
-        buf held = {0};
+        cage_buf held = {0};
         bool cancelled = false;
         for (size_t i = 0; i < asst.blocks_len && !cancelled; i++) {
             cage_block *b = &asst.blocks[i];

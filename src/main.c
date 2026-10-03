@@ -16,6 +16,7 @@
 #include "resolve.h"
 #include "resources.h"
 #include "tool.h"
+#include "util.h"
 #include "tui/tui.h"
 
 static volatile bool g_cancel;
@@ -23,23 +24,6 @@ static volatile bool g_cancel;
 static void on_signal(int sig) {
     (void)sig;
     g_cancel = true;
-}
-
-static char *read_stream(FILE *f) {
-    size_t cap = 4096, len = 0;
-    char *buf = malloc(cap);
-    if (!buf) abort();
-    size_t n;
-    while ((n = fread(buf + len, 1, cap - len, f)) > 0) {
-        len += n;
-        if (len == cap) {
-            cap *= 2;
-            buf = realloc(buf, cap);
-            if (!buf) abort();
-        }
-    }
-    buf[len] = '\0';
-    return buf;
 }
 
 int main(int argc, char **argv) {
@@ -75,7 +59,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "-p requires a prompt\n");
             return 2;
         }
-        stdin_prompt = read_stream(stdin);
+        stdin_prompt = cage_read_stream(stdin);
         prompt = stdin_prompt;
     }
 

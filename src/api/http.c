@@ -1,6 +1,5 @@
 #include "http.h"
 
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,29 +7,7 @@
 #include <yyjson.h>
 
 #include "sse.h"
-
-static void *xmalloc(size_t n) {
-    void *p = malloc(n);
-    if (!p) abort();
-    return p;
-}
-
-static char *xstrdup(const char *s) {
-    size_t n = strlen(s) + 1;
-    char *p = xmalloc(n);
-    memcpy(p, s, n);
-    return p;
-}
-
-static void set_error(char **err, const char *fmt, ...) {
-    char detail[512];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(detail, sizeof detail, fmt, ap);
-    va_end(ap);
-    free(*err);
-    *err = xstrdup(detail);
-}
+#include "util.h"
 
 typedef struct {
     cage_sse sse;
@@ -145,7 +122,7 @@ int cage_http_stream(cage_http_request *req) {
     if (req->aborted) {
         // The caller turns this into an "aborted" stop reason.
     } else if (res != CURLE_OK) {
-        set_error(&req->error, "provider: %s", curl_easy_strerror(res));
+        cage_set_error(&req->error, "provider: %s", curl_easy_strerror(res));
         rc = -1;
     } else if (st.status >= 400) {
         req->error = http_error(st.status, st.raw, st.raw_len);
@@ -154,4 +131,55 @@ int cage_http_stream(cage_http_request *req) {
     cage_sse_free(&st.sse);
     free(st.raw);
     return rc;
+}
+
+cage_api_result cage_api_post(const char *url, const char *body,
+                              const char *auth_prefix, const char *api_key,
+                              const char *const *extra,
+                              const volatile bool *cancel,
+                              cage_http_data_fn on_data, void *user,
+                              const char *stream_error, char **err) {
+    struct curl_slist *headers = NULL;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    headers = curl_slist_append(headers, "Accept: text/event-stream");
+    char *auth = NULL;
+    if (auth_prefix && api_key && api_key[0]) {
+        size_t n = strlen(auth_prefix) + strlen(api_key) + 1;
+        auth = xmalloc(n);
+        snprintf(auth, n, "%s%s", auth_prefix, api_key);
+        headers = curl_slist_append(headers, auth);
+    }
+    for (size_t i = 0; extra && extra[i]; i++)
+        headers = curl_slist_append(headers, extra[i]);
+
+    cage_http_request req = {
+        .url = url,
+        .body = body,
+        .headers = headers,
+        .cancel = cancel,
+        .on_data = on_data,
+        .user = user,
+    };
+    cage_http_stream(&req);
+
+    cage_api_result result;
+    if (req.aborted) {
+        result = CAGE_API_ABORTED;
+    } else if (req.error) {
+        free(*err);
+        *err = req.error;
+        req.error = NULL;
+        result = CAGE_API_TRANSPORT_ERROR;
+    } else if (stream_error) {
+        result = CAGE_API_STREAM_ERROR;
+    } else {
+        result = CAGE_API_OK;
+    }
+
+    curl_slist_free_all(headers);
+    free(auth);
+    free(req.error);
+    free((char *)url);
+    free((char *)body);
+    return result;
 }

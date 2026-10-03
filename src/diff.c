@@ -12,6 +12,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "util.h"
+
 #define MAX_FILE_BYTES (1u << 20)
 #define MAX_TOTAL_BYTES (32u << 20)
 #define BINARY_SNIFF 8192
@@ -20,45 +22,6 @@
 
 // ---- small helpers --------------------------------------------------------
 
-static void *xmalloc(size_t n) {
-    void *p = malloc(n);
-    if (!p) abort();
-    return p;
-}
-
-static void *xcalloc(size_t n, size_t size) {
-    void *p = calloc(n, size);
-    if (!p) abort();
-    return p;
-}
-
-static char *xstrdup(const char *s) {
-    size_t n = strlen(s) + 1;
-    char *p = xmalloc(n);
-    memcpy(p, s, n);
-    return p;
-}
-
-typedef struct {
-    char *data;
-    size_t len;
-    size_t cap;
-} buf;
-
-static void buf_add(buf *b, const char *p, size_t n) {
-    if (b->len + n + 1 > b->cap) {
-        size_t cap = b->cap ? b->cap : 64;
-        while (cap < b->len + n + 1) cap *= 2;
-        b->data = realloc(b->data, cap);
-        if (!b->data) abort();
-        b->cap = cap;
-    }
-    memcpy(b->data + b->len, p, n);
-    b->len += n;
-    b->data[b->len] = '\0';
-}
-
-static void buf_addz(buf *b, const char *s) { buf_add(b, s, strlen(s)); }
 
 // ---- file states and cache ------------------------------------------------
 
@@ -488,14 +451,14 @@ static char *unified(const char *path, const char *a, size_t alen,
         npref[i + 1] = npref[i] + (ops[i].kind == OP_EQ || ops[i].kind == OP_INS);
     }
 
-    buf out = {0};
-    buf_addz(&out, "Index: ");
-    buf_addz(&out, path);
-    buf_addz(&out, "\n===================================================================\n--- ");
-    buf_addz(&out, path);
-    buf_addz(&out, "\n+++ ");
-    buf_addz(&out, path);
-    buf_addz(&out, "\n");
+    cage_buf out = {0};
+    buf_adds(&out, "Index: ");
+    buf_adds(&out, path);
+    buf_adds(&out, "\n===================================================================\n--- ");
+    buf_adds(&out, path);
+    buf_adds(&out, "\n+++ ");
+    buf_adds(&out, path);
+    buf_adds(&out, "\n");
 
     size_t i = 0;
     while (i < on) {
@@ -521,14 +484,14 @@ static char *unified(const char *path, const char *a, size_t alen,
         add_range(r1, sizeof r1, opref[hs] + 1, opref[he] - opref[hs]);
         add_range(r2, sizeof r2, npref[hs] + 1, npref[he] - npref[hs]);
         snprintf(hdr, sizeof hdr, "@@ -%s +%s @@\n", r1, r2);
-        buf_addz(&out, hdr);
+        buf_adds(&out, hdr);
 
         for (size_t k = hs; k < he; k++) {
             char prefix = ops[k].kind == OP_DEL ? '-' : ops[k].kind == OP_INS ? '+' : ' ';
             buf_add(&out, &prefix, 1);
             buf_add(&out, ops[k].l.p, ops[k].l.len);
-            buf_addz(&out, "\n");
-            if (!ops[k].l.nl) buf_addz(&out, "\\ No newline at end of file\n");
+            buf_adds(&out, "\n");
+            if (!ops[k].l.nl) buf_adds(&out, "\\ No newline at end of file\n");
         }
         i = he;
     }

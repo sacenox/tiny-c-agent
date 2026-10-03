@@ -1,6 +1,6 @@
 #include "complete.h"
 
-#include "buf.h"
+#include "util.h"
 
 #include <dirent.h>
 #include <limits.h>

@@ -13,20 +13,17 @@ WARN    := -Wall -Wextra -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wpoi
 BUILD   := build
 BIN     := $(BUILD)/cage
 
-PKGS    := libuv libcurl ncursesw yyjson tree-sitter \
+PKGS    := libcurl yyjson tree-sitter \
            tree-sitter-javascript tree-sitter-bash \
            tree-sitter-markdown tree-sitter-markdown-inline
 
-TSJSON  := third_party/tree-sitter-json
-
 SRCS    := $(shell find src -name '*.c' | sort)
 OBJS    := $(patsubst src/%.c,$(BUILD)/obj/%.o,$(SRCS))
-TSJSON_OBJ := $(BUILD)/obj/$(TSJSON)/src/parser.o
-DEPS    := $(OBJS:.o=.d) $(TSJSON_OBJ:.o=.d)
+DEPS    := $(OBJS:.o=.d)
 
 BASE     := -std=$(STD) $(OPT) -pthread
 
-CPPFLAGS += -D_GNU_SOURCE -Isrc -I$(TSJSON)/src -MMD -MP
+CPPFLAGS += -D_GNU_SOURCE -Isrc -MMD -MP
 CFLAGS   += $(BASE) $(WARN) $(shell pkg-config --cflags $(PKGS))
 LDLIBS   += $(shell pkg-config --libs $(PKGS)) -pthread
 
@@ -38,17 +35,12 @@ all: $(BIN)
 catalog:
 	python3 tools/gen_catalog.py
 
-$(BIN): $(OBJS) $(TSJSON_OBJ)
+$(BIN): $(OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/obj/%.o: src/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
-
-# Vendored grammars are generated code and are built without the project warnings.
-$(TSJSON_OBJ): $(TSJSON)/src/parser.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(BASE) -c -o $@ $<
 
 deps:
 	@for p in $(PKGS); do \

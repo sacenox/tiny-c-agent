@@ -2,22 +2,11 @@
 
 #include "catalog.h"
 
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static int fail(char **err, const char *fmt, ...) {
-    char detail[256];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(detail, sizeof detail, fmt, ap);
-    va_end(ap);
-    size_t n = strlen(detail) + 1;
-    *err = malloc(n);
-    if (*err) memcpy(*err, detail, n);
-    return -1;
-}
+#include "util.h"
 
 const char *cage_provider_canonical(const char *provider) {
     if (provider && strcmp(provider, "opencode-zen") == 0) return "opencode";
@@ -27,9 +16,9 @@ const char *cage_provider_canonical(const char *provider) {
 int cage_resolve_model(const cage_config *cfg, cage_model *out, char **err) {
     if (err) *err = NULL;
     if (!cfg->provider || !cfg->provider[0])
-        return fail(err, "no provider configured (set \"provider\")");
+        return cage_fail(err, "no provider configured (set \"provider\")");
     if (!cfg->model || !cfg->model[0])
-        return fail(err, "no model configured (set \"model\")");
+        return cage_fail(err, "no model configured (set \"model\")");
 
     memset(out, 0, sizeof *out);
     out->provider = cfg->provider;
@@ -63,5 +52,5 @@ int cage_resolve_model(const cage_config *cfg, cage_model *out, char **err) {
             return 0;
         }
     }
-    return fail(err, "unknown provider \"%s\"", cfg->provider);
+    return cage_fail(err, "unknown provider \"%s\"", cfg->provider);
 }

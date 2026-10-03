@@ -3,7 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "buf.h"
+#include "util.h"
+#include "util.h"
 
 #define TAB 4
 
@@ -14,23 +15,9 @@ struct cage_editor {
     size_t col;     // code point index within the row
     int scroll;
     int width;
-    bool masked;
     char *text;     // cached join, valid until the next change
     bool text_dirty;
 };
-
-static void *xmalloc(size_t n) {
-    void *p = malloc(n);
-    if (!p) abort();
-    return p;
-}
-
-static char *xstrdup(const char *s) {
-    size_t n = strlen(s) + 1;
-    char *p = xmalloc(n);
-    memcpy(p, s, n);
-    return p;
-}
 
 static size_t cp_count(const char *s) {
     size_t n = 0, len = strlen(s);
@@ -72,11 +59,9 @@ static bool cp_is_space(uint32_t cp) {
     return cp == ' ' || cp == '\t' || cp == '\n' || cp == '\r' || cp == '\v' || cp == '\f';
 }
 
-// First code point index of the word before `col`.
-static size_t word_start(const char *s, size_t col) {
-    // Materialize code points for simple indexing.
-    size_t len = strlen(s);
-    size_t cap = 8, n = 0;
+// Decodes `s` into a malloc'd array of code points; *n receives the count.
+static uint32_t *cps_of(const char *s, size_t *n_out) {
+    size_t len = strlen(s), cap = 8, n = 0;
     uint32_t *cps = xmalloc(cap * sizeof *cps);
     for (size_t i = 0; i < len;) {
         uint32_t cp;
@@ -84,12 +69,19 @@ static size_t word_start(const char *s, size_t col) {
         if (b <= 0) break;
         if (n == cap) {
             cap *= 2;
-            cps = realloc(cps, cap * sizeof *cps);
-            if (!cps) abort();
+            cps = xrealloc(cps, cap * sizeof *cps);
         }
         cps[n++] = cp;
         i += (size_t)b;
     }
+    *n_out = n;
+    return cps;
+}
+
+// First code point index of the word before `col`.
+static size_t word_start(const char *s, size_t col) {
+    size_t n;
+    uint32_t *cps = cps_of(s, &n);
     size_t i = col;
     while (i > 0 && cp_is_space(cps[i - 1])) i--;
     while (i > 0 && !cp_is_space(cps[i - 1])) i--;
@@ -99,21 +91,8 @@ static size_t word_start(const char *s, size_t col) {
 
 // One past the word at or after `col`.
 static size_t word_end(const char *s, size_t col) {
-    size_t len = strlen(s);
-    size_t cap = 8, n = 0;
-    uint32_t *cps = xmalloc(cap * sizeof *cps);
-    for (size_t i = 0; i < len;) {
-        uint32_t cp;
-        int b = cage_utf8_decode(s + i, len - i, &cp);
-        if (b <= 0) break;
-        if (n == cap) {
-            cap *= 2;
-            cps = realloc(cps, cap * sizeof *cps);
-            if (!cps) abort();
-        }
-        cps[n++] = cp;
-        i += (size_t)b;
-    }
+    size_t n;
+    uint32_t *cps = cps_of(s, &n);
     size_t i = col;
     while (i < n && cp_is_space(cps[i])) i++;
     while (i < n && !cp_is_space(cps[i])) i++;
@@ -149,14 +128,10 @@ const char *cage_editor_text(cage_editor *e) {
         buf_adds(&b, e->lines[i]);
     }
     free(e->text);
-    e->text = b.data ? buf_steal(&b) : xstrdup("");
+    e->text = buf_steal(&b);
     buf_free(&b);
     e->text_dirty = false;
     return e->text;
-}
-
-void cage_editor_set_masked(cage_editor *e, bool masked) {
-    e->masked = masked;
 }
 
 void cage_editor_clear(cage_editor *e) {
@@ -200,15 +175,6 @@ void cage_editor_set_text(cage_editor *e, const char *text) {
     e->text_dirty = true;
 }
 
-static char *display_line(cage_editor *e, size_t line) {
-    if (!e->masked) return xstrdup(e->lines[line]);
-    size_t n = cp_count(e->lines[line]);
-    char *out = xmalloc(n + 1);
-    memset(out, '*', n);
-    out[n] = '\0';
-    return out;
-}
-
 // Display column of every code point boundary in `line`, tabs expanded.
 static int *cells_of(const char *line, size_t *n_out) {
     size_t len = strlen(line);
@@ -245,7 +211,7 @@ static size_t col_at_cell(const char *line, int cell) {
 }
 
 static void caret(cage_editor *e, int *row_out, int *col_out) {
-    char *line = display_line(e, e->row);
+    char *line = xstrdup(e->lines[e->row]);
     char *expanded = cage_expand_tabs(line, TAB);
     size_t nrows;
     char **chunks = cage_wrap_line(expanded, e->width, &nrows);
@@ -267,51 +233,43 @@ static void caret(cage_editor *e, int *row_out, int *col_out) {
     free(line);
 }
 
+// Replaces the code points [start, end) of a line with `insert`. A copy of
+// `line` is passed because the caller may hold it.
+static void line_splice(cage_editor *e, const char *line, size_t start, size_t end, const char *insert) {
+    char *before = cp_slice(line, 0, start);
+    char *after = cp_slice(line, end, cp_count(line));
+    tui_buf b;
+    buf_init(&b);
+    buf_adds(&b, before);
+    buf_adds(&b, insert);
+    buf_adds(&b, after);
+    free(before);
+    free(after);
+    free(e->lines[e->row]);
+    e->lines[e->row] = buf_steal(&b);
+    buf_free(&b);
+    e->text_dirty = true;
+}
+
 static void insert_text(cage_editor *e, const char *text) {
     // Split `text` on newlines.
     size_t nparts = 1;
     for (const char *p = text; *p; p++)
         if (*p == '\n') nparts++;
 
+    if (nparts == 1) {
+        line_splice(e, e->lines[e->row], e->col, e->col, text);
+        e->col += cp_count(text);
+        return;
+    }
+
     char *line = e->lines[e->row];
     char *before = cp_slice(line, 0, e->col);
     char *after = cp_slice(line, e->col, cp_count(line));
 
-    if (nparts == 1) {
-        tui_buf b;
-        buf_init(&b);
-        buf_adds(&b, before);
-        buf_adds(&b, text);
-        buf_adds(&b, after);
-        free(e->lines[e->row]);
-        e->lines[e->row] = b.data ? buf_steal(&b) : xstrdup("");
-        buf_free(&b);
-        e->col += cp_count(text);
-        e->text_dirty = true;
-        free(before);
-        free(after);
-        return;
-    }
-
     // Build the replacement lines.
-    size_t cap = 8, n = 0;
-    char **parts = xmalloc(cap * sizeof *parts);
-    const char *p = text;
-    for (;;) {
-        const char *nl = strchr(p, '\n');
-        size_t len = nl ? (size_t)(nl - p) : strlen(p);
-        char *part = xmalloc(len + 1);
-        memcpy(part, p, len);
-        part[len] = '\0';
-        if (n == cap) {
-            cap *= 2;
-            parts = realloc(parts, cap * sizeof *parts);
-            if (!parts) abort();
-        }
-        parts[n++] = part;
-        if (!nl) break;
-        p = nl + 1;
-    }
+    size_t n;
+    char **parts = cage_split_lines(text, &n);
 
     tui_buf head;
     buf_init(&head);
@@ -329,12 +287,13 @@ static void insert_text(cage_editor *e, const char *text) {
     char **nl = xmalloc((e->nlines + 1) * sizeof *nl);
     size_t k = 0;
     for (size_t i = 0; i < e->row; i++) nl[k++] = e->lines[i];
-    nl[k++] = head.data ? buf_steal(&head) : xstrdup("");
+    nl[k++] = buf_steal(&head);
     buf_free(&head);
     for (size_t i = 1; i + 1 < n; i++) nl[k++] = parts[i];
-    nl[k++] = tail.data ? buf_steal(&tail) : xstrdup("");
+    nl[k++] = buf_steal(&tail);
     buf_free(&tail);
     for (size_t i = e->row + 1; i < e->nlines; i++) nl[k++] = e->lines[i];
+    free(line);
     free(e->lines);
     e->lines = nl;
     e->nlines = k;
@@ -348,20 +307,8 @@ static void insert_text(cage_editor *e, const char *text) {
 
 static void backspace(cage_editor *e) {
     if (e->col > 0) {
-        char *line = e->lines[e->row];
-        char *before = cp_slice(line, 0, e->col - 1);
-        char *after = cp_slice(line, e->col, cp_count(line));
-        tui_buf b;
-        buf_init(&b);
-        buf_adds(&b, before);
-        buf_adds(&b, after);
-        free(line);
-        e->lines[e->row] = b.data ? buf_steal(&b) : xstrdup("");
-        buf_free(&b);
-        free(before);
-        free(after);
+        line_splice(e, e->lines[e->row], e->col - 1, e->col, "");
         e->col--;
-        e->text_dirty = true;
         return;
     }
     if (e->row > 0) {
@@ -371,7 +318,7 @@ static void backspace(cage_editor *e) {
         buf_adds(&b, e->lines[e->row - 1]);
         buf_adds(&b, e->lines[e->row]);
         free(e->lines[e->row - 1]);
-        e->lines[e->row - 1] = b.data ? buf_steal(&b) : xstrdup("");
+        e->lines[e->row - 1] = buf_steal(&b);
         buf_free(&b);
         free(e->lines[e->row]);
         for (size_t i = e->row; i + 1 < e->nlines; i++) e->lines[i] = e->lines[i + 1];
@@ -383,21 +330,9 @@ static void backspace(cage_editor *e) {
 }
 
 static void delete_forward(cage_editor *e) {
-    char *line = e->lines[e->row];
-    size_t n = cp_count(line);
+    size_t n = cp_count(e->lines[e->row]);
     if (e->col < n) {
-        char *before = cp_slice(line, 0, e->col);
-        char *after = cp_slice(line, e->col + 1, n);
-        tui_buf b;
-        buf_init(&b);
-        buf_adds(&b, before);
-        buf_adds(&b, after);
-        free(line);
-        e->lines[e->row] = b.data ? buf_steal(&b) : xstrdup("");
-        buf_free(&b);
-        free(before);
-        free(after);
-        e->text_dirty = true;
+        line_splice(e, e->lines[e->row], e->col, e->col + 1, "");
         return;
     }
     if (e->row + 1 < e->nlines) {
@@ -406,7 +341,7 @@ static void delete_forward(cage_editor *e) {
         buf_adds(&b, e->lines[e->row]);
         buf_adds(&b, e->lines[e->row + 1]);
         free(e->lines[e->row]);
-        e->lines[e->row] = b.data ? buf_steal(&b) : xstrdup("");
+        e->lines[e->row] = buf_steal(&b);
         buf_free(&b);
         free(e->lines[e->row + 1]);
         for (size_t i = e->row + 1; i + 1 < e->nlines; i++) e->lines[i] = e->lines[i + 1];
@@ -432,21 +367,9 @@ cage_edit_result cage_editor_handle(cage_editor *e, const cage_key *key) {
         delete_forward(e);
         return CAGE_EDIT_CHANGED;
     case CAGE_KEY_WORD_BACK: {
-        char *line = e->lines[e->row];
-        size_t start = word_start(line, e->col);
-        char *before = cp_slice(line, 0, start);
-        char *after = cp_slice(line, e->col, cp_count(line));
-        tui_buf b;
-        buf_init(&b);
-        buf_adds(&b, before);
-        buf_adds(&b, after);
-        free(line);
-        e->lines[e->row] = b.data ? buf_steal(&b) : xstrdup("");
-        buf_free(&b);
-        free(before);
-        free(after);
+        size_t start = word_start(e->lines[e->row], e->col);
+        line_splice(e, e->lines[e->row], start, e->col, "");
         e->col = start;
-        e->text_dirty = true;
         return CAGE_EDIT_CHANGED;
     }
     case CAGE_KEY_LEFT:
@@ -563,21 +486,9 @@ bool cage_editor_complete_word(cage_editor *e, char *(*step)(const char *word, v
     char *completed = step(word, user);
     free(word);
     if (!completed) return false;
-    char *before = cp_slice(line, 0, start);
-    char *after = cp_slice(line, e->col, cp_count(line));
-    tui_buf b;
-    buf_init(&b);
-    buf_adds(&b, before);
-    buf_adds(&b, completed);
-    buf_adds(&b, after);
-    free(line);
-    e->lines[e->row] = b.data ? buf_steal(&b) : xstrdup("");
-    buf_free(&b);
+    line_splice(e, line, start, e->col, completed);
     e->col = start + cp_count(completed);
     free(completed);
-    free(before);
-    free(after);
-    e->text_dirty = true;
     return true;
 }
 
@@ -587,7 +498,7 @@ cage_editor_view cage_editor_render(cage_editor *e, int width, int max_rows) {
     char **rows = xmalloc(cap * sizeof *rows);
     int cursor_row = 0, cursor_col = 0;
     for (size_t line = 0; line < e->nlines; line++) {
-        char *disp = display_line(e, line);
+        char *disp = xstrdup(e->lines[line]);
         char *expanded = cage_expand_tabs(disp, TAB);
         size_t nchunks;
         char **chunks = cage_wrap_line(expanded, e->width, &nchunks);
@@ -637,9 +548,3 @@ cage_editor_view cage_editor_render(cage_editor *e, int width, int max_rows) {
     return v;
 }
 
-void cage_editor_view_free(cage_editor_view *v) {
-    for (size_t i = 0; i < v->nrows; i++) free(v->rows[i]);
-    free(v->rows);
-    v->rows = NULL;
-    v->nrows = 0;
-}

@@ -3,7 +3,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,47 +11,13 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "util.h"
+
 struct cage_session {
     int fd;
     char id[128];
     char path[PATH_MAX + 16];
 };
-
-static void *xmalloc(size_t n) {
-    void *p = malloc(n);
-    if (!p) abort();
-    return p;
-}
-
-static int fail(char **err, const char *fmt, ...) {
-    char detail[512];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(detail, sizeof detail, fmt, ap);
-    va_end(ap);
-    *err = xmalloc(strlen(detail) + 1);
-    strcpy(*err, detail);
-    return -1;
-}
-
-// Creates every component of path, like mkdir -p.
-static int mkdirs(const char *path) {
-    char buf[PATH_MAX];
-    size_t len = strlen(path);
-    if (len == 0 || len >= sizeof buf) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    memcpy(buf, path, len + 1);
-    for (char *p = buf + 1; *p; p++) {
-        if (*p != '/') continue;
-        *p = '\0';
-        if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
-        *p = '/';
-    }
-    if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
-    return 0;
-}
 
 static void stamp_now(char out[32]) {
     time_t t = time(NULL);
@@ -103,25 +68,12 @@ static void slugify(const char *text, char *out, size_t cap) {
     if (n == 0) snprintf(out, cap, "session");
 }
 
-static int write_all(int fd, const char *buf, size_t len) {
-    while (len > 0) {
-        ssize_t n = write(fd, buf, len);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
-        buf += n;
-        len -= (size_t)n;
-    }
-    return 0;
-}
-
 // Writes one line and fsyncs, so a committed record survives a crash.
 static int write_record(cage_session *s, const char *line, size_t len, char **err) {
-    if (write_all(s->fd, line, len) != 0 || write_all(s->fd, "\n", 1) != 0)
-        return fail(err, "session %s: write failed: %s", s->path, strerror(errno));
+    if (cage_write_all(s->fd, line, len) != 0 || cage_write_all(s->fd, "\n", 1) != 0)
+        return cage_fail(err, "session %s: write failed: %s", s->path, strerror(errno));
     if (fsync(s->fd) != 0)
-        return fail(err, "session %s: fsync failed: %s", s->path, strerror(errno));
+        return cage_fail(err, "session %s: fsync failed: %s", s->path, strerror(errno));
     return 0;
 }
 
@@ -131,8 +83,8 @@ cage_session *cage_session_open(const char *sessions_dir, const char *cwd,
 
     char slug[48];
     slugify(title ? title : "", slug, sizeof slug);
-    if (mkdirs(sessions_dir) != 0) {
-        fail(err, "session: cannot create %s: %s", sessions_dir, strerror(errno));
+    if (cage_mkdirs(sessions_dir) != 0) {
+        cage_fail(err, "session: cannot create %s: %s", sessions_dir, strerror(errno));
         return NULL;
     }
 
@@ -148,12 +100,12 @@ cage_session *cage_session_open(const char *sessions_dir, const char *cwd,
         snprintf(dir, sizeof dir, "%s/%s", sessions_dir, id);
         if (mkdir(dir, 0755) == 0) created = true;
         else if (errno != EEXIST) {
-            fail(err, "session: cannot create %s: %s", dir, strerror(errno));
+            cage_fail(err, "session: cannot create %s: %s", dir, strerror(errno));
             return NULL;
         }
     }
     if (!created) {
-        fail(err, "session: could not create a unique directory in %s", sessions_dir);
+        cage_fail(err, "session: could not create a unique directory in %s", sessions_dir);
         return NULL;
     }
 
@@ -161,7 +113,7 @@ cage_session *cage_session_open(const char *sessions_dir, const char *cwd,
     snprintf(log_path, sizeof log_path, "%s/session.jsonl", dir);
     int fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd < 0) {
-        fail(err, "session: cannot open %s: %s", log_path, strerror(errno));
+        cage_fail(err, "session: cannot open %s: %s", log_path, strerror(errno));
         return NULL;
     }
 
@@ -185,7 +137,7 @@ cage_session *cage_session_open(const char *sessions_dir, const char *cwd,
     char *line = yyjson_mut_val_write(obj, 0, &len);
     yyjson_mut_doc_free(doc);
     if (!line) {
-        fail(err, "session %s: cannot serialize header", s->path);
+        cage_fail(err, "session %s: cannot serialize header", s->path);
         close(fd);
         free(s);
         return NULL;
@@ -209,7 +161,7 @@ int cage_session_append(cage_session *s, yyjson_mut_val *record, char **err) {
     if (err) *err = NULL;
     size_t len = 0;
     char *line = yyjson_mut_val_write(record, 0, &len);
-    if (!line) return fail(err, "session %s: cannot serialize record", s->path);
+    if (!line) return cage_fail(err, "session %s: cannot serialize record", s->path);
     int rc = write_record(s, line, len, err);
     free(line);
     return rc;

@@ -4,11 +4,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "buf.h"
+#include "util.h"
 #include "catalog.h"
 #include "complete.h"
 #include "resolve.h"
 #include "theme.h"
+#include "util.h"
 
 // The keybindings the TUI accepts, in the order /help prints them.
 static const char *const KEYBINDINGS[][2] = {
@@ -48,26 +49,8 @@ static const cage_command COMMANDS[] = {
     {"thinking", "set the effort level", run_thinking},
 };
 
-static void *xmalloc(size_t n) {
-    void *p = malloc(n);
-    if (!p) abort();
-    return p;
-}
-
 static void emit_str(cage_command_ctx *ctx, const char *s) {
     ctx->write(ctx->user, strdup(s));
-}
-
-// A malloc'd copy with surrounding whitespace removed.
-static char *trimmed(const char *s) {
-    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
-    size_t n = strlen(s);
-    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\n' || s[n - 1] == '\r'))
-        n--;
-    char *out = xmalloc(n + 1);
-    memcpy(out, s, n);
-    out[n] = '\0';
-    return out;
 }
 
 // One aligned `key  description` block; the key column is dimmed.
@@ -83,7 +66,7 @@ static char *keyed(const char *key, const char *description, size_t width) {
     buf_free(&pad);
     buf_adds(&b, "  ");
     buf_adds(&b, description);
-    return b.data ? buf_steal(&b) : strdup("");
+    return buf_steal(&b);
 }
 
 static void run_help(cage_command_ctx *ctx, const char *args) {
@@ -217,7 +200,7 @@ char *cage_choose_title(const cage_config *cfg, cage_choose what,
 }
 
 static void run_provider(cage_command_ctx *ctx, const char *args) {
-    char *id = trimmed(args);
+    char *id = cage_trim(args);
     if (id[0] == '\0') {
         free(id);
         ctx->choose(ctx->user, CAGE_CHOOSE_PROVIDER);
@@ -249,7 +232,7 @@ static void run_provider(cage_command_ctx *ctx, const char *args) {
 }
 
 static void run_model(cage_command_ctx *ctx, const char *args) {
-    char *id = trimmed(args);
+    char *id = cage_trim(args);
     if (id[0] == '\0') {
         free(id);
         ctx->choose(ctx->user, CAGE_CHOOSE_MODEL);
@@ -266,7 +249,7 @@ static void run_model(cage_command_ctx *ctx, const char *args) {
 }
 
 static void run_thinking(cage_command_ctx *ctx, const char *args) {
-    char *level = trimmed(args);
+    char *level = cage_trim(args);
     if (level[0] == '\0') {
         free(level);
         ctx->choose(ctx->user, CAGE_CHOOSE_EFFORT);

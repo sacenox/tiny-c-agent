@@ -4,7 +4,6 @@
 #include "api.h"
 
 #include <curl/curl.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,68 +12,9 @@
 
 #include "http.h"
 #include "sse.h"
-
-static void *xmalloc(size_t n) {
-    void *p = malloc(n);
-    if (!p) abort();
-    return p;
-}
-
-static char *xstrdup(const char *s) {
-    size_t n = strlen(s) + 1;
-    char *p = xmalloc(n);
-    memcpy(p, s, n);
-    return p;
-}
-
-static int fail(char **err, const char *fmt, ...) {
-    char detail[512];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(detail, sizeof detail, fmt, ap);
-    va_end(ap);
-    *err = xstrdup(detail);
-    return -1;
-}
-
-// ---- growable byte buffer -------------------------------------------------
-
-typedef struct {
-    char *data;
-    size_t len;
-    size_t cap;
-} buf;
-
-static void buf_add(buf *b, const void *p, size_t n) {
-    if (b->len + n + 1 > b->cap) {
-        size_t cap = b->cap ? b->cap : 128;
-        while (cap < b->len + n + 1) cap *= 2;
-        b->data = realloc(b->data, cap);
-        if (!b->data) abort();
-        b->cap = cap;
-    }
-    memcpy(b->data + b->len, p, n);
-    b->len += n;
-    b->data[b->len] = '\0';
-}
-
-static void buf_free(buf *b) {
-    free(b->data);
-    b->data = NULL;
-    b->len = b->cap = 0;
-}
+#include "util.h"
 
 // ---- request building -----------------------------------------------------
-
-// Concatenates a message's text blocks into one string.
-static char *join_text(const cage_message *m) {
-    buf b = {0};
-    for (size_t i = 0; i < m->blocks_len; i++)
-        if (m->blocks[i].type == CAGE_BLOCK_TEXT && m->blocks[i].text)
-            buf_add(&b, m->blocks[i].text, strlen(m->blocks[i].text));
-    buf_add(&b, "", 0);
-    return b.data;
-}
 
 static void add_message(yyjson_mut_doc *doc, yyjson_mut_val *arr, const cage_message *m) {
     yyjson_mut_val *o = yyjson_mut_obj(doc);
@@ -83,7 +23,7 @@ static void add_message(yyjson_mut_doc *doc, yyjson_mut_val *arr, const cage_mes
     if (m->role == CAGE_ROLE_TOOL) {
         yyjson_mut_obj_add_strcpy(doc, o, "role", "tool");
         yyjson_mut_obj_add_strcpy(doc, o, "tool_call_id", m->tool_call_id ? m->tool_call_id : "");
-        char *t = join_text(m);
+        char *t = cage_message_text(m);
         if (t[0] == '\0' && cage_message_has_image(m)) {
             free(t);
             t = xstrdup("(see attached image)");
@@ -94,14 +34,14 @@ static void add_message(yyjson_mut_doc *doc, yyjson_mut_val *arr, const cage_mes
     }
     if (m->role == CAGE_ROLE_USER) {
         yyjson_mut_obj_add_strcpy(doc, o, "role", "user");
-        char *t = join_text(m);
+        char *t = cage_message_text(m);
         yyjson_mut_obj_add_strcpy(doc, o, "content", t);
         free(t);
         return;
     }
 
     yyjson_mut_obj_add_strcpy(doc, o, "role", "assistant");
-    char *t = join_text(m);
+    char *t = cage_message_text(m);
     yyjson_mut_obj_add_strcpy(doc, o, "content", t);
     free(t);
 
@@ -134,15 +74,7 @@ static void add_tools(yyjson_mut_doc *doc, yyjson_mut_val *root, const cage_cont
         yyjson_mut_obj_add_strcpy(doc, tool, "type", "function");
         yyjson_mut_val *fn = yyjson_mut_obj(doc);
         yyjson_mut_obj_add_val(doc, tool, "function", fn);
-        yyjson_mut_obj_add_strcpy(doc, fn, "name", t->name);
-        yyjson_mut_obj_add_strcpy(doc, fn, "description", t->description ? t->description : "");
-        const char *params = t->parameters ? t->parameters : "{}";
-        yyjson_doc *pdoc = yyjson_read(params, strlen(params), 0);
-        if (pdoc) {
-            yyjson_mut_val *copy = yyjson_val_mut_copy(doc, yyjson_doc_get_root(pdoc));
-            yyjson_mut_obj_add_val(doc, fn, "parameters", copy);
-            yyjson_doc_free(pdoc);
-        }
+        cage_json_tool(doc, fn, t, "parameters");
     }
 }
 
@@ -233,12 +165,12 @@ static char *build_request(const cage_model *model, const cage_context *ctx,
 typedef struct {
     char *id;
     char *name;
-    buf args;
+    cage_buf args;
 } tool_acc;
 
 typedef struct {
-    buf text;
-    buf reasoning;
+    cage_buf text;
+    cage_buf reasoning;
     tool_acc *calls;
     size_t calls_len;
     char *finish_reason;
@@ -249,12 +181,6 @@ typedef struct {
     cage_stream_fn emit;
     void *user;
 } sse_state;
-
-static void emit_delta(sse_state *st, cage_stream_type type, const char *delta) {
-    if (!st->emit) return;
-    cage_stream_event ev = {.type = type, .delta = delta};
-    st->emit(&ev, st->user);
-}
 
 static void grow_calls(sse_state *st, size_t count) {
     if (count <= st->calls_len) return;
@@ -269,7 +195,7 @@ static void handle_delta(sse_state *st, yyjson_val *delta) {
     if (yyjson_is_str(content) && yyjson_get_str(content)[0]) {
         const char *s = yyjson_get_str(content);
         buf_add(&st->text, s, strlen(s));
-        emit_delta(st, CAGE_STREAM_TEXT_DELTA, s);
+        cage_emit_delta(st->emit, st->user, CAGE_STREAM_TEXT_DELTA, s);
     }
 
     static const char *const reasoning_fields[] = {"reasoning_content", "reasoning", "reasoning_text"};
@@ -278,7 +204,7 @@ static void handle_delta(sse_state *st, yyjson_val *delta) {
         if (!yyjson_is_str(r) || !yyjson_get_str(r)[0]) continue;
         const char *s = yyjson_get_str(r);
         buf_add(&st->reasoning, s, strlen(s));
-        emit_delta(st, CAGE_STREAM_REASONING_DELTA, s);
+        cage_emit_delta(st->emit, st->user, CAGE_STREAM_REASONING_DELTA, s);
         break;
     }
 
@@ -311,7 +237,8 @@ static void handle_delta(sse_state *st, yyjson_val *delta) {
     }
 }
 
-static void handle_data(sse_state *st, const char *json, size_t len) {
+static void on_data(const char *json, size_t len, void *user) {
+    sse_state *st = user;
     yyjson_doc *doc = yyjson_read(json, len, 0);
     if (!doc) {
         if (!st->error) st->error = xstrdup("stream: invalid JSON chunk");
@@ -357,10 +284,6 @@ static void handle_data(sse_state *st, const char *json, size_t len) {
     yyjson_doc_free(doc);
 }
 
-static void on_data(const char *json, size_t len, void *user) {
-    handle_data(user, json, len);
-}
-
 static void sse_free(sse_state *st) {
     buf_free(&st->text);
     buf_free(&st->reasoning);
@@ -375,30 +298,12 @@ static void sse_free(sse_state *st) {
 }
 
 static void finalize(sse_state *st, cage_message *out) {
-    if (st->reasoning.len > 0) {
-        cage_block *b = cage_message_add_block(out, CAGE_BLOCK_THINKING);
-        b->text = xstrdup(st->reasoning.data);
-    }
-    if (st->text.len > 0) {
-        cage_block *b = cage_message_add_block(out, CAGE_BLOCK_TEXT);
-        b->text = xstrdup(st->text.data);
-    }
+    cage_add_text_block(out, CAGE_BLOCK_THINKING, st->reasoning.data);
+    cage_add_text_block(out, CAGE_BLOCK_TEXT, st->text.data);
     for (size_t i = 0; i < st->calls_len; i++) {
         tool_acc *a = &st->calls[i];
         if (!a->name && a->args.len == 0) continue;
-        cage_block *b = cage_message_add_block(out, CAGE_BLOCK_TOOL_CALL);
-        b->tool_call_id = xstrdup(a->id ? a->id : "");
-        b->tool_name = xstrdup(a->name ? a->name : "");
-        b->arguments = xstrdup(a->args.len ? a->args.data : "{}");
-        if (st->emit) {
-            cage_stream_event ev = {
-                .type = CAGE_STREAM_TOOL_CALL,
-                .tool_call_id = b->tool_call_id,
-                .tool_name = b->tool_name,
-                .tool_arguments = b->arguments,
-            };
-            st->emit(&ev, st->user);
-        }
+        cage_add_tool_block(out, a->id, a->name, a->args.len ? a->args.data : NULL, st->emit, st->user);
     }
     out->tokens_in = st->tokens_in;
     out->tokens_out = st->tokens_out;
@@ -410,16 +315,6 @@ static void finalize(sse_state *st, cage_message *out) {
 
 // ---- transport ------------------------------------------------------------
 
-static char *endpoint_url(const char *base) {
-    if (!base || !base[0]) return NULL;
-    size_t n = strlen(base);
-    const char *path = "chat/completions";
-    bool slash = base[n - 1] == '/';
-    size_t size = n + strlen(path) + 2;
-    char *url = xmalloc(size);
-    snprintf(url, size, slash ? "%s%s" : "%s/%s", base, path);
-    return url;
-}
 
 int cage_openai_completions_stream(const cage_model *model, const cage_context *ctx,
                                    const cage_stream_opts *opts,
@@ -430,54 +325,38 @@ int cage_openai_completions_stream(const cage_model *model, const cage_context *
     memset(out, 0, sizeof *out);
     out->role = CAGE_ROLE_ASSISTANT;
 
-    char *url = endpoint_url(model->base_url);
-    if (!url) return fail(err, "provider: no base url");
+    char *url = cage_url_endpoint(model->base_url, "chat/completions");
+    if (!url) return cage_fail(err, "provider: no base url");
     char *body = build_request(model, ctx, opts);
     if (!body) {
         free(url);
-        return fail(err, "provider: cannot build request");
+        return cage_fail(err, "provider: cannot build request");
     }
 
     sse_state st = {0};
     st.emit = emit;
     st.user = user;
 
-    char *auth = NULL;
+    const char *extra[2] = {NULL, NULL};
     char *session = NULL;
-    struct curl_slist *headers = NULL;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    headers = curl_slist_append(headers, "Accept: text/event-stream");
-    if (model->api_key && model->api_key[0]) {
-        size_t n = strlen(model->api_key) + 24;
-        auth = xmalloc(n);
-        snprintf(auth, n, "Authorization: Bearer %s", model->api_key);
-        headers = curl_slist_append(headers, auth);
-    }
     if (model->session_header && model->session_header[0] && opts && opts->session_id && opts->session_id[0]) {
         size_t n = strlen(model->session_header) + strlen(opts->session_id) + 4;
         session = xmalloc(n);
         snprintf(session, n, "%s: %s", model->session_header, opts->session_id);
-        headers = curl_slist_append(headers, session);
+        extra[0] = session;
     }
 
-    cage_http_request req = {
-        .url = url,
-        .body = body,
-        .headers = headers,
-        .cancel = cancel,
-        .on_data = on_data,
-        .user = &st,
-    };
-    int rc = cage_http_stream(&req);
+    cage_api_result r = cage_api_post(url, body, "Authorization: Bearer ",
+                                      model->api_key, extra, cancel, on_data, &st, st.error, err);
+    free(session);
 
-    if (req.aborted) {
+    int rc;
+    if (r == CAGE_API_ABORTED) {
         out->stop_reason = xstrdup("aborted");
         rc = 0;
-    } else if (req.error) {
-        *err = req.error;
-        req.error = NULL;
+    } else if (r == CAGE_API_TRANSPORT_ERROR) {
         rc = -1;
-    } else if (st.error) {
+    } else if (r == CAGE_API_STREAM_ERROR) {
         out->stop_reason = xstrdup("error");
         out->error_message = xstrdup(st.error);
         rc = 0;
@@ -485,13 +364,6 @@ int cage_openai_completions_stream(const cage_model *model, const cage_context *
         finalize(&st, out);
         rc = 0;
     }
-
-    curl_slist_free_all(headers);
-    free(auth);
-    free(session);
-    free(req.error);
-    free(url);
-    free(body);
     sse_free(&st);
     return rc;
 }

@@ -7,80 +7,13 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "util.h"
+
 // ---- small helpers --------------------------------------------------------
-
-static void *xmalloc(size_t n) {
-    void *p = malloc(n);
-    if (!p) abort();
-    return p;
-}
-
-static char *xstrdup(const char *s) {
-    size_t n = strlen(s) + 1;
-    char *p = xmalloc(n);
-    memcpy(p, s, n);
-    return p;
-}
-
-typedef struct {
-    char *data;
-    size_t len;
-    size_t cap;
-} buf;
-
-static void buf_add(buf *b, const char *p, size_t n) {
-    if (b->len + n + 1 > b->cap) {
-        size_t cap = b->cap ? b->cap : 64;
-        while (cap < b->len + n + 1) cap *= 2;
-        b->data = realloc(b->data, cap);
-        if (!b->data) abort();
-        b->cap = cap;
-    }
-    memcpy(b->data + b->len, p, n);
-    b->len += n;
-    b->data[b->len] = '\0';
-}
-
-static void buf_adds(buf *b, const char *s) { buf_add(b, s, strlen(s)); }
-
-// Reads a whole file. Returns NULL only when the file cannot be opened or read.
-static char *read_file(const char *path) {
-    FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
-    buf b = {0};
-    char chunk[8192];
-    size_t n;
-    while ((n = fread(chunk, 1, sizeof chunk, f)) > 0) buf_add(&b, chunk, n);
-    fclose(f);
-    if (!b.data) buf_add(&b, "", 1);
-    return b.data;
-}
-
-// A malloc'd copy with leading and trailing ASCII whitespace removed.
-static char *trim_dup(const char *s) {
-    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
-    size_t n = strlen(s);
-    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\n' || s[n - 1] == '\r'))
-        n--;
-    char *out = xmalloc(n + 1);
-    memcpy(out, s, n);
-    out[n] = '\0';
-    return out;
-}
 
 static bool file_exists(const char *path) {
     struct stat st;
     return stat(path, &st) == 0 && S_ISREG(st.st_mode);
-}
-
-// Joins two path components with a single separator.
-static char *join_path(const char *a, const char *b) {
-    size_t al = strlen(a);
-    bool slash = al > 0 && a[al - 1] == '/';
-    size_t n = al + strlen(b) + (slash ? 1 : 2);
-    char *p = xmalloc(n);
-    snprintf(p, n, slash ? "%s%s" : "%s/%s", a, b);
-    return p;
 }
 
 // ---- skills ---------------------------------------------------------------
@@ -136,11 +69,11 @@ static void discover_skills(cage_resources *r, const cage_config *cfg) {
         struct dirent *ent;
         while ((ent = readdir(d)) != NULL) {
             if (ent->d_name[0] == '.') continue;
-            char *dir = join_path(cfg->skills_dirs[i], ent->d_name);
-            char *path = join_path(dir, "SKILL.md");
+            char *dir = cage_path_join(cfg->skills_dirs[i], ent->d_name);
+            char *path = cage_path_join(dir, "SKILL.md");
             free(dir);
             if (file_exists(path)) {
-                char *text = read_file(path);
+                char *text = cage_read_file(path);
                 if (text) {
                     char *name = NULL, *desc = NULL;
                     frontmatter(text, &name, &desc);
@@ -170,12 +103,12 @@ static void discover_agent_files(cage_resources *r, const char *cwd) {
     static const char *const names[] = {"AGENTS.md", "CLAUDE.md"};
     char *roots[2] = {NULL, NULL};
     const char *home = getenv("HOME");
-    if (home && home[0]) roots[0] = join_path(home, ".agents");
+    if (home && home[0]) roots[0] = cage_path_join(home, ".agents");
     roots[1] = xstrdup(cwd ? cwd : ".");
     for (size_t ri = 0; ri < 2; ri++) {
         if (!roots[ri]) continue;
         for (size_t ni = 0; ni < sizeof names / sizeof names[0]; ni++) {
-            char *path = join_path(roots[ri], names[ni]);
+            char *path = cage_path_join(roots[ri], names[ni]);
             if (file_exists(path)) push_agent_file(r, path);
             else free(path);
         }
@@ -190,9 +123,9 @@ cage_resources *cage_resources_build(const cage_config *cfg, const char *cwd, ch
     cage_resources *r = xmalloc(sizeof *r);
     memset(r, 0, sizeof *r);
 
-    buf prompt = {0};
+    cage_buf prompt = {0};
     if (cfg->system_prompt && cfg->system_prompt[0]) {
-        char *text = read_file(cfg->system_prompt);
+        char *text = cage_read_file(cfg->system_prompt);
         if (!text) {
             size_t n = strlen(cfg->system_prompt) + 32;
             *err = xmalloc(n);
@@ -201,7 +134,7 @@ cage_resources *cage_resources_build(const cage_config *cfg, const char *cwd, ch
             free(prompt.data);
             return NULL;
         }
-        char *trimmed = trim_dup(text);
+        char *trimmed = cage_trim(text);
         buf_adds(&prompt, trimmed);
         free(trimmed);
         free(text);
@@ -227,9 +160,9 @@ cage_resources *cage_resources_build(const cage_config *cfg, const char *cwd, ch
     if (cfg->discover_agent_files) {
         discover_agent_files(r, cwd);
         for (size_t i = 0; i < r->agent_files_len; i++) {
-            char *text = read_file(r->agent_files[i].path);
+            char *text = cage_read_file(r->agent_files[i].path);
             if (!text) continue;
-            char *trimmed = trim_dup(text);
+            char *trimmed = cage_trim(text);
             if (prompt.len) buf_adds(&prompt, "\n\n");
             buf_adds(&prompt, "## ");
             buf_adds(&prompt, r->agent_files[i].path);

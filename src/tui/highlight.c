@@ -11,8 +11,9 @@
 #include <tree_sitter/tree-sitter-markdown.h>
 #include <tree_sitter/tree-sitter-markdown-inline.h>
 
-#include "buf.h"
+#include "util.h"
 #include "theme.h"
+#include "util.h"
 
 typedef struct {
     TSParser *parser;
@@ -24,68 +25,25 @@ static char *read_query(const char *lang) {
     const char *env = getenv("CAGE_QUERIES_DIR");
     const char *home = getenv("HOME");
     char path[4096];
+    if (env && env[0]) {
+        snprintf(path, sizeof path, "%s/%s/highlights.scm", env, lang);
+        char *q = cage_read_file(path);
+        if (q) return q;
+    }
     const char *tmpl[] = {
-        "%s/%s/highlights.scm",
         "/usr/share/tree-sitter/queries/%s/highlights.scm",
         "/usr/share/nvim/runtime/queries/%s/highlights.scm",
+        "%s/.local/share/nvim/lazy/nvim-treesitter/runtime/queries/%s/highlights.scm",
     };
-    if (env && env[0]) {
-        snprintf(path, sizeof path, tmpl[0], env, lang);
-        FILE *f = fopen(path, "rb");
-        if (f) {
-            fseek(f, 0, SEEK_END);
-            long n = ftell(f);
-            rewind(f);
-            if (n < 0) {
-                fclose(f);
-                return NULL;
-            }
-            char *buf = malloc((size_t)n + 1);
-            if (!buf) abort();
-            size_t got = fread(buf, 1, (size_t)n, f);
-            fclose(f);
-            buf[got] = '\0';
-            return buf;
+    for (size_t i = 0; i < sizeof tmpl / sizeof tmpl[0]; i++) {
+        if (i == 2) {
+            if (!home || !home[0]) break;
+            snprintf(path, sizeof path, tmpl[i], home, lang);
+        } else {
+            snprintf(path, sizeof path, tmpl[i], lang);
         }
-    }
-    for (size_t i = 1; i < sizeof tmpl / sizeof tmpl[0]; i++) {
-        snprintf(path, sizeof path, tmpl[i], lang);
-        FILE *f = fopen(path, "rb");
-        if (!f) continue;
-        fseek(f, 0, SEEK_END);
-        long n = ftell(f);
-        rewind(f);
-        if (n < 0) {
-            fclose(f);
-            return NULL;
-        }
-        char *buf = malloc((size_t)n + 1);
-        if (!buf) abort();
-        size_t got = fread(buf, 1, (size_t)n, f);
-        fclose(f);
-        buf[got] = '\0';
-        return buf;
-    }
-    if (home && home[0]) {
-        snprintf(path, sizeof path,
-                 "%s/.local/share/nvim/lazy/nvim-treesitter/runtime/queries/%s/highlights.scm",
-                 home, lang);
-        FILE *f = fopen(path, "rb");
-        if (f) {
-            fseek(f, 0, SEEK_END);
-            long n = ftell(f);
-            rewind(f);
-            if (n < 0) {
-                fclose(f);
-                return NULL;
-            }
-            char *buf = malloc((size_t)n + 1);
-            if (!buf) abort();
-            size_t got = fread(buf, 1, (size_t)n, f);
-            fclose(f);
-            buf[got] = '\0';
-            return buf;
-        }
+        char *q = cage_read_file(path);
+        if (q) return q;
     }
     return NULL;
 }

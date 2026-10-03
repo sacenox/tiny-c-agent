@@ -56,6 +56,9 @@ cage_block *cage_message_add_block(cage_message *m, cage_block_type type);
 // True when the message carries at least one image block.
 bool cage_message_has_image(const cage_message *m);
 
+// Concatenates the message's text blocks (TEXT only) into one malloc'd string.
+char *cage_message_text(const cage_message *m);
+
 void cage_message_free(cage_message *m);
 
 // Serializes the message to its provider-neutral JSON object.

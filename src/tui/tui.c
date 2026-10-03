@@ -29,6 +29,7 @@
 #include "term.h"
 #include "theme.h"
 #include "usage.h"
+#include "util.h"
 
 #define SPINNER_MS 120
 #define MAX_BODY_ROWS 12
@@ -52,48 +53,8 @@ static void on_signal(int sig) {
 
 // ---- small helpers ---------------------------------------------------------
 
-static void *xmalloc(size_t n) {
-    void *p = malloc(n);
-    if (!p) abort();
-    return p;
-}
-
-static char *xstrdup(const char *s) {
-    size_t n = strlen(s) + 1;
-    char *p = xmalloc(n);
-    memcpy(p, s, n);
-    return p;
-}
-
-static void write_all(int fd, const char *s, size_t n) {
-    while (n > 0) {
-        ssize_t w = write(fd, s, n);
-        if (w < 0) {
-            if (errno == EINTR) continue;
-            break;
-        }
-        s += w;
-        n -= (size_t)w;
-    }
-}
-
 static bool starts_with(const char *s, const char *prefix) {
     return strncmp(s, prefix, strlen(prefix)) == 0;
-}
-
-typedef struct {
-    cage_body_line *v;
-    size_t n;
-    size_t cap;
-} blist;
-
-static void bl_push(blist *l, char *text, cage_fg_fn style, const char *bg) {
-    if (l->n == l->cap) {
-        l->cap = l->cap ? l->cap * 2 : 16;
-        l->v = realloc(l->v, l->cap * sizeof *l->v);
-        if (!l->v) abort();
-    }
-    l->v[l->n++] = (cage_body_line){text, style, bg};
 }
 
 static void free_rows(char **rows, size_t n) {
@@ -121,7 +82,7 @@ typedef struct {
     cage_editor *editor;
     cage_mdstream reply;
     cage_tailstream activity;
-    blist pending_calls;
+    cage_blist pending_calls;
 
     tui_buf scroll;
     bool wrote;
@@ -287,22 +248,12 @@ static void commit_lines(tui *t, cage_body_line *lines, size_t n) {
 
 static void commit_user(tui *t, const char *text) {
     t->separator = true;
-    char *copy = xstrdup(text);
-    size_t cap = 8, n = 0;
-    cage_body_line *lines = xmalloc(cap * sizeof *lines);
-    for (char *p = copy;;) {
-        char *nl = strchr(p, '\n');
-        if (nl) *nl = '\0';
-        if (n == cap) {
-            cap *= 2;
-            lines = realloc(lines, cap * sizeof *lines);
-            if (!lines) abort();
-        }
-        lines[n++] = (cage_body_line){xstrdup(p), fg_blue, NULL};
-        if (!nl) break;
-        p = nl + 1;
-    }
-    free(copy);
+    size_t n;
+    char **parts = cage_split_lines(text, &n);
+    cage_body_line *lines = xmalloc(n * sizeof *lines);
+    for (size_t i = 0; i < n; i++)
+        lines[i] = (cage_body_line){parts[i], fg_blue, NULL};
+    free(parts);
     commit_lines(t, lines, n);
     for (size_t i = 0; i < n; i++) free(lines[i].text);
     free(lines);
@@ -329,29 +280,12 @@ static cage_body_line diff_line(const char *line) {
 // Splits a tool result into its display lines, rewriting the trailing exit code
 // for bash and stripping the repeated diff header for edit.
 static cage_body_line *result_lines(const char *name, const char *text, bool is_error, size_t *out_n) {
-    // trimEnd
-    size_t len = strlen(text);
-    while (len > 0 && (text[len - 1] == '\n' || text[len - 1] == '\r')) len--;
-    char *copy = xmalloc(len + 1);
-    memcpy(copy, text, len);
-    copy[len] = '\0';
+    char *copy = cage_trim_end(text);
+    size_t raw_n;
+    char **raw = cage_split_lines(copy, &raw_n);
+    size_t n = raw_n;
 
-    size_t cap = 8, n = 0;
-    char **raw = xmalloc(cap * sizeof *raw);
-    for (char *p = copy;;) {
-        char *nl = strchr(p, '\n');
-        if (nl) *nl = '\0';
-        if (n == cap) {
-            cap *= 2;
-            raw = realloc(raw, cap * sizeof *raw);
-            if (!raw) abort();
-        }
-        raw[n++] = p;
-        if (!nl) break;
-        p = nl + 1;
-    }
-
-    blist out = {0};
+    cage_blist out = {0};
     bool diff = false;
     size_t start = 0;
     if (strcmp(name, "bash") == 0 && n > 0) {
@@ -364,7 +298,7 @@ static cage_body_line *result_lines(const char *name, const char *text, bool is_
                 buf_init(&b);
                 buf_adds(&b, "exit ");
                 buf_adds(&b, code);
-                char *tmp = b.data ? buf_steal(&b) : xstrdup("");
+                char *tmp = buf_steal(&b);
                 buf_free(&b);
                 bl_push(&out, xstrdup(tmp), fg_red, NULL);
                 free(tmp);
@@ -386,42 +320,26 @@ static cage_body_line *result_lines(const char *name, const char *text, bool is_
         }
     }
     free(copy);
-    free(raw);
+    cage_strv_free(raw, raw_n);
     *out_n = out.n;
     return out.v;
 }
 
 static cage_body_line *diff_rows(const cage_file_diff *diffs, size_t ndiffs, size_t *out_n) {
-    blist out = {0};
+    cage_blist out = {0};
     for (size_t d = 0; d < ndiffs; d++) {
         bl_push(&out, xstrdup(diffs[d].path), fg_cyan, NULL);
         if (diffs[d].patch) {
-            size_t len = strlen(diffs[d].patch);
-            while (len > 0 && (diffs[d].patch[len - 1] == '\n' || diffs[d].patch[len - 1] == '\r')) len--;
-            char *copy = xmalloc(len + 1);
-            memcpy(copy, diffs[d].patch, len);
-            copy[len] = '\0';
-            size_t cap = 8, n = 0;
-            char **lines = xmalloc(cap * sizeof *lines);
-            for (char *p = copy;;) {
-                char *nl = strchr(p, '\n');
-                if (nl) *nl = '\0';
-                if (n == cap) {
-                    cap *= 2;
-                    lines = realloc(lines, cap * sizeof *lines);
-                    if (!lines) abort();
-                }
-                lines[n++] = p;
-                if (!nl) break;
-                p = nl + 1;
-            }
+            char *copy = cage_trim_end(diffs[d].patch);
+            size_t n;
+            char **lines = cage_split_lines(copy, &n);
             size_t start = 0;
             while (start < n && edit_header(lines[start])) start++;
             for (size_t i = start; i < n; i++) {
                 cage_body_line bl = diff_line(lines[i]);
                 bl_push(&out, bl.text, bl.style, bl.bg);
             }
-            free(lines);
+            cage_strv_free(lines, n);
             free(copy);
         } else if (diffs[d].note) {
             bl_push(&out, xstrdup(diffs[d].note), fg_dim, NULL);
@@ -531,7 +449,7 @@ static char *call_summary(const char *name, const char *arguments) {
     if (doc) yyjson_doc_free(doc);
     // trim
     while (b.len > 0 && (b.data[b.len - 1] == ' ')) b.data[--b.len] = '\0';
-    return b.data ? buf_steal(&b) : xstrdup("");
+    return buf_steal(&b);
 }
 
 // ---- status ----------------------------------------------------------------
@@ -545,7 +463,7 @@ static char *status_line(tui *t) {
         buf_adds(&b, " · ");
         buf_adds(&b, usage);
         free(usage);
-        return b.data ? buf_steal(&b) : xstrdup("");
+        return buf_steal(&b);
     }
     if (!t->active || t->phase == CAGE_PHASE_IDLE) return usage;
 
@@ -582,7 +500,7 @@ static char *status_line(tui *t) {
     buf_adds(&out, usage);
     buf_free(&phase);
     free(usage);
-    return out.data ? buf_steal(&out) : xstrdup("");
+    return buf_steal(&out);
 }
 
 // ---- live region -----------------------------------------------------------
@@ -663,8 +581,7 @@ static void tui_render_locked(tui *t) {
         buf_free(&painted);
     }
 
-    char *scroll = t->scroll.data ? buf_steal(&t->scroll) : xstrdup("");
-    buf_init(&t->scroll);
+    char *scroll = buf_steal(&t->scroll);
     bool reanchor = scroll[0] != '\0' && t->live_rows >= t->height - 1;
     tui_buf above;
     buf_init(&above);
@@ -674,7 +591,7 @@ static void tui_render_locked(tui *t) {
     tui_buf frame;
     buf_init(&frame);
     live_draw(t, &frame, lines, total, cursor_row, ev.cursor_col, above.data ? above.data : "");
-    write_all(t->out_fd, frame.data, frame.len);
+    cage_write_all(t->out_fd, frame.data, frame.len);
     buf_free(&frame);
     buf_free(&above);
     free(scroll);
@@ -711,6 +628,13 @@ static void end_turn(tui *t, const char *line) {
     push(t, line);
 }
 
+// Ends the turn with the buffer's line, consuming the buffer.
+static void end_turn_buf(tui *t, tui_buf *b) {
+    char *line = buf_steal(b);
+    end_turn(t, line);
+    free(line);
+}
+
 // Extracts concatenated assistant text and total tokens from a message JSON.
 static void message_text_usage(const char *json, char **text_out, long *total_out) {
     *text_out = NULL;
@@ -738,7 +662,7 @@ static void message_text_usage(const char *json, char **text_out, long *total_ou
         if (yyjson_is_int(total)) *total_out = (long)yyjson_get_int(total);
     }
     yyjson_doc_free(doc);
-    *text_out = b.data ? buf_steal(&b) : xstrdup("");
+    *text_out = buf_steal(&b);
     buf_free(&b);
 }
 
@@ -830,7 +754,7 @@ static void on_event(const cage_event *e, void *user) {
         char *summary = call_summary(e->u.tool_call.name, e->u.tool_call.arguments);
         buf_adds(&b, summary);
         free(summary);
-        bl_push(&t->pending_calls, b.data ? buf_steal(&b) : xstrdup(""), NULL, NULL);
+        bl_push(&t->pending_calls, buf_steal(&b), NULL, NULL);
         buf_free(&b);
         break;
     }
@@ -846,18 +770,15 @@ static void on_event(const cage_event *e, void *user) {
         commit_message(t, e->u.message.json);
         break;
     case CAGE_EVENT_ERROR: {
-        tui_buf b;
-        buf_init(&b);
         tui_buf p;
         buf_init(&p);
         buf_adds(&p, "! ");
         buf_adds(&p, e->u.error.message);
+        tui_buf b;
+        buf_init(&b);
         fg_red(&b, p.data ? p.data : "");
         buf_free(&p);
-        char *line = b.data ? buf_steal(&b) : xstrdup("");
-        buf_free(&b);
-        end_turn(t, line);
-        free(line);
+        end_turn_buf(t, &b);
         break;
     }
     case CAGE_EVENT_NO_MODEL:
@@ -867,10 +788,7 @@ static void on_event(const cage_event *e, void *user) {
         tui_buf b;
         buf_init(&b);
         fg_red(&b, "! cancelled");
-        char *line = b.data ? buf_steal(&b) : xstrdup("");
-        buf_free(&b);
-        end_turn(t, line);
-        free(line);
+        end_turn_buf(t, &b);
         break;
     }
     case CAGE_EVENT_COMPLETE: {
@@ -879,10 +797,7 @@ static void on_event(const cage_event *e, void *user) {
         char text[64];
         snprintf(text, sizeof text, "[complete · %ds]", (int)elapsed(t));
         fg_dim(&b, text);
-        char *line = b.data ? buf_steal(&b) : xstrdup("");
-        buf_free(&b);
-        end_turn(t, line);
-        free(line);
+        end_turn_buf(t, &b);
         break;
     }
     }
@@ -975,7 +890,7 @@ static char *model_line(tui *t) {
         buf_adds(&b, " · ");
         buf_adds(&b, t->model.effort);
     }
-    return b.data ? buf_steal(&b) : xstrdup("");
+    return buf_steal(&b);
 }
 
 static long window_for(const char *provider, const char *model) {
@@ -1085,7 +1000,7 @@ static void start_choose(tui *t, cage_choose what, const char *provider) {
         buf_init(&b);
         buf_addf(&b, "  %zu. ", i + 1);
         buf_adds(&b, labels[i]);
-        lines[i + 1] = (cage_body_line){b.data ? buf_steal(&b) : xstrdup(""), NULL, NULL};
+        lines[i + 1] = (cage_body_line){buf_steal(&b), NULL, NULL};
         buf_free(&b);
     }
     t->separator = true;
@@ -1388,7 +1303,7 @@ static void push_banner(tui *t) {
         buf_init(&b);
         buf_adds(&b, "agents · ");
         buf_adds(&b, r->agent_files[i].path);
-        push_line(t, b.data ? buf_steal(&b) : xstrdup(""));
+        push_line(t, buf_steal(&b));
         buf_free(&b);
     }
     if (r->skills_len > 0) {
@@ -1399,7 +1314,7 @@ static void push_banner(tui *t) {
             if (i > 0) buf_adds(&b, ", ");
             buf_adds(&b, r->skills[i].name);
         }
-        push_line(t, b.data ? buf_steal(&b) : xstrdup(""));
+        push_line(t, buf_steal(&b));
         buf_free(&b);
     }
 }
@@ -1465,7 +1380,7 @@ int cage_tui_run(const cage_tui_config *c) {
     terminal_raw(&t);
     if (isatty(t.out_fd)) {
         const char *enable = "\x1b[?2004h\x1b[>1u\x1b[?u";
-        write_all(t.out_fd, enable, strlen(enable));
+        cage_write_all(t.out_fd, enable, strlen(enable));
     }
 
     push_banner(&t);
@@ -1540,14 +1455,14 @@ int cage_tui_run(const cage_tui_config *c) {
     buf_init(&out);
     live_clear(&t, &out);
     if (t.scroll.data) buf_adds(&out, t.scroll.data);
-    write_all(t.out_fd, out.data, out.len);
+    cage_write_all(t.out_fd, out.data, out.len);
     buf_free(&out);
     buf_init(&t.scroll);
     pthread_mutex_unlock(&t.lock);
 
     if (isatty(t.out_fd)) {
         const char *disable = "\x1b[<u\x1b[?2004l";
-        write_all(t.out_fd, disable, strlen(disable));
+        cage_write_all(t.out_fd, disable, strlen(disable));
     }
     terminal_restore(&t);
 

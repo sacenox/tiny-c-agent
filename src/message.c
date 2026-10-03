@@ -3,13 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static char *xstrdup(const char *s) {
-    size_t n = strlen(s) + 1;
-    char *p = malloc(n);
-    if (!p) abort();
-    memcpy(p, s, n);
-    return p;
-}
+#include "util.h"
 
 cage_message cage_message_user(const char *text) {
     cage_message m = {0};
@@ -42,6 +36,15 @@ bool cage_message_has_image(const cage_message *m) {
     for (size_t i = 0; i < m->blocks_len; i++)
         if (m->blocks[i].type == CAGE_BLOCK_IMAGE) return true;
     return false;
+}
+
+char *cage_message_text(const cage_message *m) {
+    cage_buf b;
+    buf_init(&b);
+    for (size_t i = 0; i < m->blocks_len; i++)
+        if (m->blocks[i].type == CAGE_BLOCK_TEXT && m->blocks[i].text)
+            buf_adds(&b, m->blocks[i].text);
+    return buf_steal(&b);
 }
 
 void cage_message_free(cage_message *m) {

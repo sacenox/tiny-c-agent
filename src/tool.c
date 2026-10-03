@@ -18,6 +18,8 @@
 
 #include <yyjson.h>
 
+#include "util.h"
+
 #define MAX_TEXT 100000
 #define MAX_IMAGE_B64 (5u * 1024 * 1024)
 #define MAX_READ (16u * 1024 * 1024)
@@ -26,42 +28,6 @@
 #define TRUNCATED "\n\n... output truncated ...\n\n"
 
 // ---- small helpers --------------------------------------------------------
-
-static void *xmalloc(size_t n) {
-    void *p = malloc(n);
-    if (!p) abort();
-    return p;
-}
-
-static char *xstrdup(const char *s) {
-    size_t n = strlen(s) + 1;
-    char *p = xmalloc(n);
-    memcpy(p, s, n);
-    return p;
-}
-
-typedef struct {
-    char *data;
-    size_t len;
-    size_t cap;
-} buf;
-
-static void buf_add(buf *b, const char *p, size_t n) {
-    if (b->len + n + 1 > b->cap) {
-        size_t cap = b->cap ? b->cap : 64;
-        while (cap < b->len + n + 1) cap *= 2;
-        b->data = realloc(b->data, cap);
-        if (!b->data) abort();
-        b->cap = cap;
-    }
-    memcpy(b->data + b->len, p, n);
-    b->len += n;
-    b->data[b->len] = '\0';
-}
-
-static void buf_addz(buf *b, const char *s) {
-    buf_add(b, s, strlen(s));
-}
 
 static void set_error(cage_tool_result *res, const char *fmt, ...) {
     char detail[1024];
@@ -111,7 +77,7 @@ static bool utf8_seq(const unsigned char *p, size_t n, size_t *len) {
 // Replaces invalid byte sequences with U+FFFD, so the text survives the JSON
 // and session round trips. Mirrors a UTF-8 decode with replacement.
 static char *utf8_clean(const char *in, size_t n) {
-    buf b = {0};
+    cage_buf b = {0};
     const unsigned char *p = (const unsigned char *)in;
     size_t i = 0;
     while (i < n) {
@@ -134,7 +100,7 @@ static char *utf8_clean(const char *in, size_t n) {
 // ---- file helpers ---------------------------------------------------------
 
 // Reads up to MAX_READ bytes. Returns 0, or -1 with errno set.
-static int slurp(const char *path, buf *out) {
+static int slurp(const char *path, cage_buf *out) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) return -1;
     struct stat st;
@@ -249,7 +215,7 @@ static void tool_read(const char *args, bool supports_images, cage_tool_result *
         return;
     }
 
-    buf data = {0};
+    cage_buf data = {0};
     if (slurp(path, &data) != 0) {
         set_error(res, "read failed: %s: %s", path, strerror(errno));
         free(data.data);
@@ -295,11 +261,11 @@ static void tool_read(const char *args, bool supports_images, cage_tool_result *
     size_t take = data.len > MAX_TEXT ? MAX_TEXT : data.len;
     char *clean = utf8_clean(data.data ? data.data : "", take);
     if (data.len > MAX_TEXT) {
-        buf out = {0};
-        buf_addz(&out, clean);
+        cage_buf out = {0};
+        buf_adds(&out, clean);
         char marker[256];
         snprintf(marker, sizeof marker, "\n\n... truncated ... %s is %zu characters\n", path, data.len);
-        buf_addz(&out, marker);
+        buf_adds(&out, marker);
         free(clean);
         clean = out.data;
     }
@@ -344,7 +310,7 @@ static void tool_edit(const char *args, cage_tool_result *res) {
         return;
     }
 
-    buf data = {0};
+    cage_buf data = {0};
     if (slurp(path, &data) != 0) {
         set_error(res, "edit failed: %s: %s", path, strerror(errno));
         free(data.data);
@@ -367,7 +333,7 @@ static void tool_edit(const char *args, cage_tool_result *res) {
         return;
     }
 
-    buf out = {0};
+    cage_buf out = {0};
     buf_add(&out, data.data, at);
     buf_add(&out, nw, new_len);
     buf_add(&out, data.data + at + old_len, data.len - at - old_len);
@@ -389,7 +355,7 @@ static void tool_edit(const char *args, cage_tool_result *res) {
 // ---- bash -----------------------------------------------------------------
 
 // Keeps only the last MAX_TAIL bytes, flagging that a gap was dropped.
-static void keep_tail(buf *t, bool *truncated) {
+static void keep_tail(cage_buf *t, bool *truncated) {
     if (t->len <= MAX_TAIL) return;
     memmove(t->data, t->data + t->len - MAX_TAIL, MAX_TAIL);
     t->len = MAX_TAIL;
@@ -437,7 +403,7 @@ static void tool_bash(const char *args, cage_tool_output_fn out, void *user,
     close(pipefd[1]);
     setpgid(pid, pid);
 
-    buf head = {0}, tail = {0};
+    cage_buf head = {0}, tail = {0};
     bool truncated = false;
     bool cancelled = false;
 
@@ -502,18 +468,18 @@ static void tool_bash(const char *args, cage_tool_output_fn out, void *user,
     else if (WIFSIGNALED(status)) code = 128 + WTERMSIG(status);
     else code = 0;
 
-    buf body = {0};
+    cage_buf body = {0};
     buf_add(&body, head.data ? head.data : "", head.len);
-    if (truncated) buf_addz(&body, TRUNCATED);
+    if (truncated) buf_adds(&body, TRUNCATED);
     buf_add(&body, tail.data ? tail.data : "", tail.len);
 
     char *clean = utf8_clean(body.data ? body.data : "", body.len);
-    buf text = {0};
-    buf_addz(&text, clean);
-    if (text.len > 0 && text.data[text.len - 1] != '\n') buf_addz(&text, "\n");
+    cage_buf text = {0};
+    buf_adds(&text, clean);
+    if (text.len > 0 && text.data[text.len - 1] != '\n') buf_adds(&text, "\n");
     char code_line[32];
     snprintf(code_line, sizeof code_line, "exit code: %d", code);
-    buf_addz(&text, code_line);
+    buf_adds(&text, code_line);
     res->text = text.data;
     res->is_error = code != 0;
     free(clean);

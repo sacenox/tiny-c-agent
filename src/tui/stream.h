@@ -19,6 +19,18 @@ typedef struct {
 
 void cage_body_lines_free(cage_body_line *lines, size_t count);
 
+// A growable list of body lines, used while assembling a block.
+typedef struct {
+    cage_body_line *v;
+    size_t n;
+    size_t cap;
+} cage_blist;
+
+void bl_push(cage_blist *l, char *text, cage_fg_fn style, const char *bg);
+
+// Hands the list's array to the caller (NULL when empty) and resets the count.
+cage_body_line *bl_take(cage_blist *l, size_t *count);
+
 typedef struct {
     char *rest;
     char *fence_marker;
@@ -48,7 +60,6 @@ void cage_tailstream_init(cage_tailstream *s);
 void cage_tailstream_free(cage_tailstream *s);
 cage_body_line *cage_tailstream_feed(cage_tailstream *s, const char *delta, size_t *count);
 cage_body_line *cage_tailstream_pending(cage_tailstream *s, size_t *count);
-cage_body_line *cage_tailstream_flush(cage_tailstream *s, size_t *count);
 void cage_tailstream_reset(cage_tailstream *s);
 
 #endif

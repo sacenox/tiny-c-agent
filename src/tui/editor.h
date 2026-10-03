@@ -16,9 +16,6 @@ void cage_editor_free(cage_editor *e);
 // The draft as one string, lines joined by newline. Owned by the editor.
 const char *cage_editor_text(cage_editor *e);
 
-// Renders each character as `*` without changing the underlying text.
-void cage_editor_set_masked(cage_editor *e, bool masked);
-
 void cage_editor_clear(cage_editor *e);
 void cage_editor_set_text(cage_editor *e, const char *text);
 
@@ -43,6 +40,5 @@ typedef struct {
 
 // Clipped to `max_rows`, scrolled only as far as the caret requires.
 cage_editor_view cage_editor_render(cage_editor *e, int width, int max_rows);
-void cage_editor_view_free(cage_editor_view *v);
 
 #endif

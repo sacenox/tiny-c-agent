@@ -11,6 +11,8 @@
 
 #include <yyjson.h>
 
+#include "util.h"
+
 #define READ_FLAGS (YYJSON_READ_ALLOW_COMMENTS | YYJSON_READ_ALLOW_TRAILING_COMMAS)
 
 // A config value the user has not written yet. The partial form keeps every
@@ -31,41 +33,6 @@ typedef struct {
     bool custom_providers_set;
 } partial;
 
-static void *xmalloc(size_t n) {
-    void *p = malloc(n);
-    if (!p) abort();
-    return p;
-}
-
-static void *xcalloc(size_t n, size_t size) {
-    void *p = calloc(n, size);
-    if (!p) abort();
-    return p;
-}
-
-static void *xrealloc(void *p, size_t n) {
-    p = realloc(p, n);
-    if (!p) abort();
-    return p;
-}
-
-static char *xstrdup(const char *s) {
-    size_t n = strlen(s) + 1;
-    char *p = xmalloc(n);
-    memcpy(p, s, n);
-    return p;
-}
-
-// Builds "a/b", avoiding a doubled separator when a already ends in one.
-static char *path_join(const char *a, const char *b) {
-    size_t al = strlen(a);
-    bool slash = al > 0 && a[al - 1] == '/';
-    size_t n = al + strlen(b) + (slash ? 1 : 2);
-    char *p = xmalloc(n);
-    snprintf(p, n, slash ? "%s%s" : "%s/%s", a, b);
-    return p;
-}
-
 static int fail(char **err, const char *path, const char *fmt, ...) {
     char detail[256];
     va_list ap;
@@ -80,44 +47,26 @@ static int fail(char **err, const char *path, const char *fmt, ...) {
     return -1;
 }
 
-static void push_str(char ***arr, size_t *len, char *s) {
-    *arr = xrealloc(*arr, (*len + 1) * sizeof **arr);
-    (*arr)[*len] = s;
-    (*len)++;
-}
-
-// Stores a formatted, malloc'd message into *err when err is not NULL.
-static void set_error(char **err, const char *fmt, ...) {
-    if (!err) return;
-    char detail[512];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(detail, sizeof detail, fmt, ap);
-    va_end(ap);
-    free(*err);
-    *err = xstrdup(detail);
-}
-
 static char *config_file_path(void) {
     const char *base = getenv("XDG_CONFIG_HOME");
     char *dir;
     if (base && base[0]) {
-        dir = path_join(base, "cage");
+        dir = cage_path_join(base, "cage");
     } else {
         const char *home = getenv("HOME");
         if (!home || !home[0]) return NULL;
-        dir = path_join(home, ".config/cage");
+        dir = cage_path_join(home, ".config/cage");
     }
-    char *p = path_join(dir, "config.json");
+    char *p = cage_path_join(dir, "config.json");
     free(dir);
     return p;
 }
 
 static char *default_sessions_dir(void) {
     const char *state = getenv("XDG_STATE_HOME");
-    if (state && state[0]) return path_join(state, "cage/sessions");
+    if (state && state[0]) return cage_path_join(state, "cage/sessions");
     const char *home = getenv("HOME");
-    if (home && home[0]) return path_join(home, ".local/state/cage/sessions");
+    if (home && home[0]) return cage_path_join(home, ".local/state/cage/sessions");
     return xstrdup("sessions");
 }
 
@@ -167,7 +116,8 @@ static int parse_str_array(yyjson_val *v, const char *key,
     yyjson_arr_foreach(v, idx, max, e) {
         if (!yyjson_is_str(e))
             return fail(err, path, "\"%s[%zu]\" must be a string", key, idx);
-        push_str(out, out_len, xstrdup(yyjson_get_str(e)));
+        *out = xrealloc(*out, (*out_len + 1) * sizeof **out);
+        (*out)[(*out_len)++] = xstrdup(yyjson_get_str(e));
     }
     return 0;
 }
@@ -282,7 +232,6 @@ static int load_into(const char *path, bool required, partial *p, char **err) {
     yyjson_doc_free(doc);
     return rc;
 }
-
 static void merge_str(char **dst, char **src) {
     if (!*src) return;
     free(*dst);
@@ -339,25 +288,6 @@ static void config_free_members(cage_config *cfg) {
     free(cfg->skills_dirs);
     for (size_t i = 0; i < cfg->custom_providers_len; i++) provider_free(&cfg->custom_providers[i]);
     free(cfg->custom_providers);
-}
-
-// Creates every component of path, like mkdir -p.
-static int mkdirs(const char *path) {
-    char buf[PATH_MAX];
-    size_t len = strlen(path);
-    if (len == 0 || len >= sizeof buf) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    memcpy(buf, path, len + 1);
-    for (char *p = buf + 1; *p; p++) {
-        if (*p != '/') continue;
-        *p = '\0';
-        if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
-        *p = '/';
-    }
-    if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
-    return 0;
 }
 
 // The directory part of a path, or "." when there is no separator.
@@ -438,8 +368,8 @@ int cage_config_save(const char *provider, const char *model, const char *effort
     }
 
     char *dir = dir_of(path);
-    if (mkdirs(dir) != 0) {
-        set_error(err, "cannot create %s: %s", dir, strerror(errno));
+    if (cage_mkdirs(dir) != 0) {
+        cage_set_error(err, "cannot create %s: %s", dir, strerror(errno));
         free(dir);
         free(body);
         free(path);
@@ -452,7 +382,7 @@ int cage_config_save(const char *provider, const char *model, const char *effort
     snprintf(temp, plen + 32, "%s.%d.tmp", path, (int)getpid());
     FILE *out = fopen(temp, "wb");
     if (!out) {
-        set_error(err, "cannot write %s: %s", path, strerror(errno));
+        cage_set_error(err, "cannot write %s: %s", path, strerror(errno));
         free(temp);
         free(body);
         free(path);
@@ -462,14 +392,14 @@ int cage_config_save(const char *provider, const char *model, const char *effort
     if (fclose(out) != 0) rc = -1;
     free(body);
     if (rc != 0) {
-        set_error(err, "%s", "config write failed");
+        cage_set_error(err, "%s", "config write failed");
         remove(temp);
         free(temp);
         free(path);
         return -1;
     }
     if (rename(temp, path) != 0) {
-        set_error(err, "cannot replace %s: %s", path, strerror(errno));
+        cage_set_error(err, "cannot replace %s: %s", path, strerror(errno));
         remove(temp);
         free(temp);
         free(path);

@@ -15,31 +15,31 @@
 
 // Per-turn state passed to the provider and tool callbacks.
 typedef struct {
-    cage_agent *a;
+    tiny_agent *a;
     bool streaming;
 } turn_state;
 
 // ---- event helpers --------------------------------------------------------
 
-static void emit(cage_agent *a, const cage_event *e) {
+static void emit(tiny_agent *a, const tiny_event *e) {
     if (a->on_event) a->on_event(e, a->user);
 }
 
-static void emit_phase(cage_agent *a, cage_phase phase, const char *detail) {
-    cage_event e = {.type = CAGE_EVENT_PHASE};
+static void emit_phase(tiny_agent *a, tiny_phase phase, const char *detail) {
+    tiny_event e = {.type = TINY_EVENT_PHASE};
     e.u.phase.phase = phase;
     e.u.phase.detail = detail;
     emit(a, &e);
 }
 
-static void emit_error(cage_agent *a, const char *msg) {
-    cage_event e = {.type = CAGE_EVENT_ERROR};
+static void emit_error(tiny_agent *a, const char *msg) {
+    tiny_event e = {.type = TINY_EVENT_ERROR};
     e.u.error.message = msg ? msg : "";
     emit(a, &e);
 }
 
-static void emit_simple(cage_agent *a, cage_event_type type) {
-    cage_event e = {.type = type};
+static void emit_simple(tiny_agent *a, tiny_event_type type) {
+    tiny_event e = {.type = type};
     emit(a, &e);
 }
 
@@ -47,7 +47,7 @@ static void emit_simple(cage_agent *a, cage_event_type type) {
 
 // Appends the message to the transcript and, when configured, to the session.
 // On a persistence failure the turn must stop, so this reports the error.
-static int push_message(cage_agent *a, cage_message *m, char **err) {
+static int push_message(tiny_agent *a, tiny_message *m, char **err) {
     a->messages = realloc(a->messages, (a->messages_len + 1) * sizeof *a->messages);
     if (!a->messages) abort();
     a->messages[a->messages_len++] = *m;
@@ -57,9 +57,9 @@ static int push_message(cage_agent *a, cage_message *m, char **err) {
     yyjson_mut_val *record = yyjson_mut_obj(doc);
     yyjson_mut_doc_set_root(doc, record);
     yyjson_mut_obj_add_strcpy(doc, record, "type", "message");
-    yyjson_mut_obj_add_val(doc, record, "message", cage_message_to_val(doc, m));
+    yyjson_mut_obj_add_val(doc, record, "message", tiny_message_to_val(doc, m));
     char *serr = NULL;
-    int rc = cage_session_append(a->session, record, &serr);
+    int rc = tiny_session_append(a->session, record, &serr);
     yyjson_mut_doc_free(doc);
     if (rc != 0) {
         *err = serr ? serr : xstrdup("session append failed");
@@ -68,8 +68,8 @@ static int push_message(cage_agent *a, cage_message *m, char **err) {
     return 0;
 }
 
-static int push_user(cage_agent *a, const char *text, char **err) {
-    cage_message m = cage_message_user(text);
+static int push_user(tiny_agent *a, const char *text, char **err) {
+    tiny_message m = tiny_message_user(text);
     return push_message(a, &m, err);
 }
 
@@ -77,14 +77,14 @@ static int push_user(cage_agent *a, const char *text, char **err) {
 
 // Checks the cancel flag and, at a step boundary, a pause request. On pause it
 // blocks for steering. Returns false when the turn was cancelled.
-static bool pause_step(cage_agent *a, char **steer) {
+static bool pause_step(tiny_agent *a, char **steer) {
     *steer = NULL;
     if (a->cancel && *a->cancel) return false;
     if (!a->is_pause_requested || !a->is_pause_requested(a->user)) return true;
     if (a->clear_pause) a->clear_pause(a->user);
-    emit_phase(a, CAGE_PHASE_PAUSING, NULL);
+    emit_phase(a, TINY_PHASE_PAUSING, NULL);
     char *s = a->request_steering ? a->request_steering(a->user) : NULL;
-    emit_phase(a, CAGE_PHASE_IDLE, NULL);
+    emit_phase(a, TINY_PHASE_IDLE, NULL);
     if (a->cancel && *a->cancel) {
         free(s);
         return false;
@@ -95,24 +95,24 @@ static bool pause_step(cage_agent *a, char **steer) {
 
 // ---- provider and tool callbacks ------------------------------------------
 
-static void on_stream(const cage_stream_event *ev, void *user) {
+static void on_stream(const tiny_stream_event *ev, void *user) {
     turn_state *st = user;
     if (!st->streaming) {
         st->streaming = true;
-        emit_phase(st->a, CAGE_PHASE_STREAMING, NULL);
+        emit_phase(st->a, TINY_PHASE_STREAMING, NULL);
     }
-    cage_event e = {0};
+    tiny_event e = {0};
     switch (ev->type) {
-    case CAGE_STREAM_TEXT_DELTA:
-        e.type = CAGE_EVENT_TEXT;
+    case TINY_STREAM_TEXT_DELTA:
+        e.type = TINY_EVENT_TEXT;
         e.u.text.delta = ev->delta;
         break;
-    case CAGE_STREAM_REASONING_DELTA:
-        e.type = CAGE_EVENT_REASONING;
+    case TINY_STREAM_REASONING_DELTA:
+        e.type = TINY_EVENT_REASONING;
         e.u.reasoning.delta = ev->delta;
         break;
-    case CAGE_STREAM_TOOL_CALL:
-        e.type = CAGE_EVENT_TOOL_CALL;
+    case TINY_STREAM_TOOL_CALL:
+        e.type = TINY_EVENT_TOOL_CALL;
         e.u.tool_call.name = ev->tool_name;
         e.u.tool_call.arguments = ev->tool_arguments;
         break;
@@ -124,38 +124,38 @@ static void on_stream(const cage_stream_event *ev, void *user) {
 
 static void on_tool_output(const char *chunk, void *user) {
     turn_state *st = user;
-    cage_event e = {.type = CAGE_EVENT_TOOL_OUTPUT};
+    tiny_event e = {.type = TINY_EVENT_TOOL_OUTPUT};
     e.u.tool_output.chunk = chunk;
     emit(st->a, &e);
 }
 
-static cage_tool_result run_tool(cage_agent *a, turn_state *st, const cage_block *b) {
+static tiny_tool_result run_tool(tiny_agent *a, turn_state *st, const tiny_block *b) {
     const char *name = b->tool_name ? b->tool_name : "";
     const char *args = b->arguments ? b->arguments : "{}";
 
     // Only the tools that can write get a tree diff around them.
     if (strcmp(name, "edit") != 0 && strcmp(name, "bash") != 0)
-        return cage_tool_run(name, args, a->model.supports_images, on_tool_output, st, a->cancel);
+        return tiny_tool_run(name, args, a->model.supports_images, on_tool_output, st, a->cancel);
 
     // The tool may write anywhere under the working directory, so a diff of the
     // tree around it is the only way to report what changed.
     struct timespec start;
     clock_gettime(CLOCK_REALTIME, &start);
-    struct cage_snapshot *before = cage_snapshot_capture(NULL);
-    cage_tool_result r =
-        cage_tool_run(name, args, a->model.supports_images, on_tool_output, st, a->cancel);
-    struct cage_snapshot *after = cage_snapshot_capture(&start);
-    r.diffs = cage_snapshot_diff(before, after, &r.diffs_len);
-    cage_snapshot_free(before);
-    cage_snapshot_free(after);
+    struct tiny_snapshot *before = tiny_snapshot_capture(NULL);
+    tiny_tool_result r =
+        tiny_tool_run(name, args, a->model.supports_images, on_tool_output, st, a->cancel);
+    struct tiny_snapshot *after = tiny_snapshot_capture(&start);
+    r.diffs = tiny_snapshot_diff(before, after, &r.diffs_len);
+    tiny_snapshot_free(before);
+    tiny_snapshot_free(after);
     return r;
 }
 
 // ---- the loop -------------------------------------------------------------
 
-void cage_agent_turn(cage_agent *a, const char *input) {
+void tiny_agent_turn(tiny_agent *a, const char *input) {
     if (!a->model.model || !a->model.base_url) {
-        emit_simple(a, CAGE_EVENT_NO_MODEL);
+        emit_simple(a, TINY_EVENT_NO_MODEL);
         return;
     }
 
@@ -169,7 +169,7 @@ void cage_agent_turn(cage_agent *a, const char *input) {
     for (;;) {
         char *steer = NULL;
         if (!pause_step(a, &steer)) {
-            emit_simple(a, CAGE_EVENT_CANCELLED);
+            emit_simple(a, TINY_EVENT_CANCELLED);
             return;
         }
         if (steer && steer[0] && push_user(a, steer, &perr) != 0) {
@@ -180,28 +180,28 @@ void cage_agent_turn(cage_agent *a, const char *input) {
         }
         free(steer);
 
-        emit_phase(a, CAGE_PHASE_PREPARING, NULL);
+        emit_phase(a, TINY_PHASE_PREPARING, NULL);
 
         turn_state st = {.a = a, .streaming = false};
-        cage_context ctx = {
+        tiny_context ctx = {
             .system_prompt = a->system_prompt,
             .tools = a->tools,
             .tools_len = a->tools_len,
             .messages = a->messages,
             .messages_len = a->messages_len,
         };
-        cage_stream_opts opts = {
+        tiny_stream_opts opts = {
             .effort = a->model.effort,
-            .session_id = a->session ? cage_session_id(a->session) : NULL,
+            .session_id = a->session ? tiny_session_id(a->session) : NULL,
         };
 
-        emit_phase(a, CAGE_PHASE_WAITING_MODEL, NULL);
-        cage_message asst = {0};
+        emit_phase(a, TINY_PHASE_WAITING_MODEL, NULL);
+        tiny_message asst = {0};
         char *serr = NULL;
-        if (cage_provider_stream(&a->model, &ctx, &opts, on_stream, &st, a->cancel, &asst, &serr) != 0) {
+        if (tiny_provider_stream(&a->model, &ctx, &opts, on_stream, &st, a->cancel, &asst, &serr) != 0) {
             emit_error(a, serr ? serr : "provider error");
             free(serr);
-            cage_message_free(&asst);
+            tiny_message_free(&asst);
             return;
         }
 
@@ -210,14 +210,14 @@ void cage_agent_turn(cage_agent *a, const char *input) {
             free(perr);
             return;
         }
-        char *json = cage_message_to_json(&asst);
-        cage_event me = {.type = CAGE_EVENT_MESSAGE};
+        char *json = tiny_message_to_json(&asst);
+        tiny_event me = {.type = TINY_EVENT_MESSAGE};
         me.u.message.json = json ? json : "{}";
         emit(a, &me);
         free(json);
 
         if (asst.stop_reason && strcmp(asst.stop_reason, "aborted") == 0) {
-            emit_simple(a, CAGE_EVENT_CANCELLED);
+            emit_simple(a, TINY_EVENT_CANCELLED);
             return;
         }
         if (asst.stop_reason && strcmp(asst.stop_reason, "error") == 0) {
@@ -227,18 +227,18 @@ void cage_agent_turn(cage_agent *a, const char *input) {
 
         size_t calls = 0;
         for (size_t i = 0; i < asst.blocks_len; i++)
-            if (asst.blocks[i].type == CAGE_BLOCK_TOOL_CALL) calls++;
+            if (asst.blocks[i].type == TINY_BLOCK_TOOL_CALL) calls++;
         if (calls == 0) {
-            emit_simple(a, CAGE_EVENT_COMPLETE);
+            emit_simple(a, TINY_EVENT_COMPLETE);
             return;
         }
 
         // Steering is held until every result of this assistant turn has landed.
-        cage_buf held = {0};
+        tiny_buf held = {0};
         bool cancelled = false;
         for (size_t i = 0; i < asst.blocks_len && !cancelled; i++) {
-            cage_block *b = &asst.blocks[i];
-            if (b->type != CAGE_BLOCK_TOOL_CALL) continue;
+            tiny_block *b = &asst.blocks[i];
+            if (b->type != TINY_BLOCK_TOOL_CALL) continue;
 
             char *s2 = NULL;
             if (!pause_step(a, &s2)) {
@@ -252,12 +252,12 @@ void cage_agent_turn(cage_agent *a, const char *input) {
             }
             free(s2);
 
-            emit_phase(a, CAGE_PHASE_RUNNING_TOOL, b->tool_name);
-            cage_tool_result tr = run_tool(a, &st, b);
-            cage_message tm = cage_message_tool(b->tool_call_id, tr.text, tr.is_error);
+            emit_phase(a, TINY_PHASE_RUNNING_TOOL, b->tool_name);
+            tiny_tool_result tr = run_tool(a, &st, b);
+            tiny_message tm = tiny_message_tool(b->tool_call_id, tr.text, tr.is_error);
             free(tr.text);
             for (size_t k = 0; k < tr.images_len; k++) {
-                cage_block *ib = cage_message_add_block(&tm, CAGE_BLOCK_IMAGE);
+                tiny_block *ib = tiny_message_add_block(&tm, TINY_BLOCK_IMAGE);
                 ib->media_type = xstrdup(tr.images[k].media_type);
                 ib->data = xstrdup(tr.images[k].data);
                 free(tr.images[k].media_type);
@@ -267,24 +267,24 @@ void cage_agent_turn(cage_agent *a, const char *input) {
 
             if (push_message(a, &tm, &perr) != 0) {
                 free(held.data);
-                cage_file_diffs_free(tr.diffs, tr.diffs_len);
+                tiny_file_diffs_free(tr.diffs, tr.diffs_len);
                 emit_error(a, perr);
                 free(perr);
                 return;
             }
-            cage_event re = {.type = CAGE_EVENT_TOOL_RESULT};
+            tiny_event re = {.type = TINY_EVENT_TOOL_RESULT};
             re.u.tool_result.name = b->tool_name;
             re.u.tool_result.text = tm.blocks_len ? tm.blocks[0].text : "";
             re.u.tool_result.is_error = tm.is_error;
             re.u.tool_result.diffs = tr.diffs;
             re.u.tool_result.diffs_len = tr.diffs_len;
             emit(a, &re);
-            cage_file_diffs_free(tr.diffs, tr.diffs_len);
+            tiny_file_diffs_free(tr.diffs, tr.diffs_len);
         }
 
         if (cancelled) {
             free(held.data);
-            emit_simple(a, CAGE_EVENT_CANCELLED);
+            emit_simple(a, TINY_EVENT_CANCELLED);
             return;
         }
         if (held.len && push_user(a, held.data, &perr) != 0) {
@@ -297,8 +297,8 @@ void cage_agent_turn(cage_agent *a, const char *input) {
     }
 }
 
-void cage_agent_free(cage_agent *a) {
-    for (size_t i = 0; i < a->messages_len; i++) cage_message_free(&a->messages[i]);
+void tiny_agent_free(tiny_agent *a) {
+    for (size_t i = 0; i < a->messages_len; i++) tiny_message_free(&a->messages[i]);
     free(a->messages);
     a->messages = NULL;
     a->messages_len = 0;

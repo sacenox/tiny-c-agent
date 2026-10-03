@@ -21,7 +21,7 @@ static const char *const effort_14[] = {"none", "high"};
 static const char *const effort_15[] = {"low", "medium", "xhigh"};
 static const char *const effort_16[] = {"none", "low", "high"};
 
-const cage_model_info cage_catalog_entries[] = {
+const tiny_model_info tiny_catalog_entries[] = {
     {"opencode", "big-pickle", "Big Pickle", false, 200000L, NULL, 0},
     {"opencode", "claude-3-5-haiku", "Claude Haiku 3.5", true, 200000L, NULL, 0},
     {"opencode", "claude-fable-5", "Claude Fable 5", true, 1000000L, effort_0, 5},
@@ -173,5 +173,5 @@ const cage_model_info cage_catalog_entries[] = {
     {"opencode-go", "space-bunny-free", "Space Bunny Free", true, 1048576L, effort_0, 5},
 };
 
-const size_t cage_catalog_entries_len =
-    sizeof cage_catalog_entries / sizeof cage_catalog_entries[0];
+const size_t tiny_catalog_entries_len =
+    sizeof tiny_catalog_entries / sizeof tiny_catalog_entries[0];

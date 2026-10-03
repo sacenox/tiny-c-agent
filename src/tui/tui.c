@@ -65,24 +65,24 @@ static void free_rows(char **rows, size_t n) {
 // ---- tui state -------------------------------------------------------------
 
 typedef struct {
-    const cage_tui_config *c;
-    cage_model model;
-    cage_agent agent;
-    cage_session *session;
+    const tiny_tui_config *c;
+    tiny_model model;
+    tiny_agent agent;
+    tiny_session *session;
 
     int in_fd;
     int out_fd;
     struct termios orig;
     bool raw;
-    cage_key_parser *parser;
+    tiny_key_parser *parser;
 
     int width;
     int height;
 
-    cage_editor *editor;
-    cage_mdstream reply;
-    cage_tailstream activity;
-    cage_blist pending_calls;
+    tiny_editor *editor;
+    tiny_mdstream reply;
+    tiny_tailstream activity;
+    tiny_blist pending_calls;
 
     tui_buf scroll;
     bool wrote;
@@ -105,7 +105,7 @@ typedef struct {
     bool paused;
     bool steering_waiting;
     char *steering_text;
-    cage_phase phase;
+    tiny_phase phase;
     char *detail;
     char *writing_tool;
     long ctx_used;
@@ -119,7 +119,7 @@ typedef struct {
     // numbered options. `choice_provider` carries the provider just chosen
     // into the chained model list.
     bool choice_active;
-    cage_choose choice_kind;
+    tiny_choose choice_kind;
     char *choice_provider;
     char **choice_ids;
     char **choice_labels;
@@ -150,14 +150,14 @@ static double monotonic_now(void) {
 
 // Wraps plain text, then styles each row. Styling after the break lets a
 // continuation row inherit its source line's style.
-static char **render_rows(const cage_body_line *lines, size_t n, int width, size_t *out_n) {
+static char **render_rows(const tiny_body_line *lines, size_t n, int width, size_t *out_n) {
     size_t cap = 16, m = 0;
     char **out = xmalloc(cap * sizeof *out);
     for (size_t i = 0; i < n; i++) {
-        char *clean = cage_sanitize(lines[i].text);
-        char *expanded = cage_expand_tabs(clean, 4);
+        char *clean = tiny_sanitize(lines[i].text);
+        char *expanded = tiny_expand_tabs(clean, 4);
         size_t nrows;
-        char **rows = cage_wrap_line(expanded, width, &nrows);
+        char **rows = tiny_wrap_line(expanded, width, &nrows);
         free(clean);
         free(expanded);
         for (size_t r = 0; r < nrows; r++) {
@@ -172,7 +172,7 @@ static char **render_rows(const cage_body_line *lines, size_t n, int width, size
             }
             tui_buf b;
             buf_init(&b);
-            const char *bg = lines[i].bg ? lines[i].bg : cage_normal_bg();
+            const char *bg = lines[i].bg ? lines[i].bg : tiny_normal_bg();
             sgr_bg(&b, bg);
             if (lines[i].style) lines[i].style(&b, rows[r]);
             else buf_adds(&b, rows[r]);
@@ -188,7 +188,7 @@ static char **render_rows(const cage_body_line *lines, size_t n, int width, size
 }
 
 // render_rows plus the display-only elision for long tool bodies.
-static char **body_rows(const cage_body_line *lines, size_t n, int width, size_t *out_n) {
+static char **body_rows(const tiny_body_line *lines, size_t n, int width, size_t *out_n) {
     size_t nrows;
     char **rows = render_rows(lines, n, width, &nrows);
     if (nrows <= MAX_BODY_ROWS) {
@@ -239,7 +239,7 @@ static void push(tui *t, const char *row) {
     }
 }
 
-static void commit_lines(tui *t, cage_body_line *lines, size_t n) {
+static void commit_lines(tui *t, tiny_body_line *lines, size_t n) {
     size_t nrows;
     char **rows = render_rows(lines, n, t->width > 0 ? t->width : 1, &nrows);
     for (size_t i = 0; i < nrows; i++) push(t, rows[i]);
@@ -249,10 +249,10 @@ static void commit_lines(tui *t, cage_body_line *lines, size_t n) {
 static void commit_user(tui *t, const char *text) {
     t->separator = true;
     size_t n;
-    char **parts = cage_split_lines(text, &n);
-    cage_body_line *lines = xmalloc(n * sizeof *lines);
+    char **parts = tiny_split_lines(text, &n);
+    tiny_body_line *lines = xmalloc(n * sizeof *lines);
     for (size_t i = 0; i < n; i++)
-        lines[i] = (cage_body_line){parts[i], fg_blue, NULL};
+        lines[i] = (tiny_body_line){parts[i], fg_blue, NULL};
     free(parts);
     commit_lines(t, lines, n);
     for (size_t i = 0; i < n; i++) free(lines[i].text);
@@ -268,24 +268,24 @@ static bool edit_header(const char *line) {
            (starts_with(line, "===") && line[3] == '=');
 }
 
-static cage_body_line diff_line(const char *line) {
-    if (starts_with(line, "@@")) return (cage_body_line){xstrdup(line), fg_cyan, NULL};
-    if (starts_with(line, "+")) return (cage_body_line){xstrdup(line), fg_green, cage_diff_add()};
-    if (starts_with(line, "-")) return (cage_body_line){xstrdup(line), fg_red, cage_diff_delete()};
-    if (starts_with(line, "\\ No newline")) return (cage_body_line){xstrdup(line), fg_dim, NULL};
-    if (starts_with(line, " ")) return (cage_body_line){xstrdup(line), fg_dim, NULL};
-    return (cage_body_line){xstrdup(line), NULL, NULL};
+static tiny_body_line diff_line(const char *line) {
+    if (starts_with(line, "@@")) return (tiny_body_line){xstrdup(line), fg_cyan, NULL};
+    if (starts_with(line, "+")) return (tiny_body_line){xstrdup(line), fg_green, tiny_diff_add()};
+    if (starts_with(line, "-")) return (tiny_body_line){xstrdup(line), fg_red, tiny_diff_delete()};
+    if (starts_with(line, "\\ No newline")) return (tiny_body_line){xstrdup(line), fg_dim, NULL};
+    if (starts_with(line, " ")) return (tiny_body_line){xstrdup(line), fg_dim, NULL};
+    return (tiny_body_line){xstrdup(line), NULL, NULL};
 }
 
 // Splits a tool result into its display lines, rewriting the trailing exit code
 // for bash and stripping the repeated diff header for edit.
-static cage_body_line *result_lines(const char *name, const char *text, bool is_error, size_t *out_n) {
-    char *copy = cage_trim_end(text);
+static tiny_body_line *result_lines(const char *name, const char *text, bool is_error, size_t *out_n) {
+    char *copy = tiny_trim_end(text);
     size_t raw_n;
-    char **raw = cage_split_lines(copy, &raw_n);
+    char **raw = tiny_split_lines(copy, &raw_n);
     size_t n = raw_n;
 
-    cage_blist out = {0};
+    tiny_blist out = {0};
     bool diff = false;
     size_t start = 0;
     if (strcmp(name, "bash") == 0 && n > 0) {
@@ -313,33 +313,33 @@ static cage_body_line *result_lines(const char *name, const char *text, bool is_
     }
     for (size_t i = start; i < n; i++) {
         if (diff) {
-            cage_body_line bl = diff_line(raw[i]);
+            tiny_body_line bl = diff_line(raw[i]);
             bl_push(&out, bl.text, bl.style, bl.bg);
         } else {
             bl_push(&out, xstrdup(raw[i]), NULL, NULL);
         }
     }
     free(copy);
-    cage_strv_free(raw, raw_n);
+    tiny_strv_free(raw, raw_n);
     *out_n = out.n;
     return out.v;
 }
 
-static cage_body_line *diff_rows(const cage_file_diff *diffs, size_t ndiffs, size_t *out_n) {
-    cage_blist out = {0};
+static tiny_body_line *diff_rows(const tiny_file_diff *diffs, size_t ndiffs, size_t *out_n) {
+    tiny_blist out = {0};
     for (size_t d = 0; d < ndiffs; d++) {
         bl_push(&out, xstrdup(diffs[d].path), fg_cyan, NULL);
         if (diffs[d].patch) {
-            char *copy = cage_trim_end(diffs[d].patch);
+            char *copy = tiny_trim_end(diffs[d].patch);
             size_t n;
-            char **lines = cage_split_lines(copy, &n);
+            char **lines = tiny_split_lines(copy, &n);
             size_t start = 0;
             while (start < n && edit_header(lines[start])) start++;
             for (size_t i = start; i < n; i++) {
-                cage_body_line bl = diff_line(lines[i]);
+                tiny_body_line bl = diff_line(lines[i]);
                 bl_push(&out, bl.text, bl.style, bl.bg);
             }
-            cage_strv_free(lines, n);
+            tiny_strv_free(lines, n);
             free(copy);
         } else if (diffs[d].note) {
             bl_push(&out, xstrdup(diffs[d].note), fg_dim, NULL);
@@ -350,10 +350,10 @@ static cage_body_line *diff_rows(const cage_file_diff *diffs, size_t ndiffs, siz
 }
 
 static void commit_tool_result(tui *t, const char *name, const char *text, bool is_error,
-                               const cage_file_diff *diffs, size_t ndiffs) {
+                               const tiny_file_diff *diffs, size_t ndiffs) {
     t->separator = true;
     if (t->pending_calls.n > 0) {
-        cage_body_line call = t->pending_calls.v[0];
+        tiny_body_line call = t->pending_calls.v[0];
         memmove(t->pending_calls.v, t->pending_calls.v + 1, (t->pending_calls.n - 1) * sizeof *t->pending_calls.v);
         t->pending_calls.n--;
         commit_lines(t, &call, 1);
@@ -362,7 +362,7 @@ static void commit_tool_result(tui *t, const char *name, const char *text, bool 
     int width = t->width - (int)strlen(BODY_PREFIX);
     if (width < 1) width = 1;
     size_t nlines;
-    cage_body_line *lines = result_lines(name, text, is_error, &nlines);
+    tiny_body_line *lines = result_lines(name, text, is_error, &nlines);
     size_t nrows;
     char **rows = (strcmp(name, "edit") == 0) ? render_rows(lines, nlines, width, &nrows)
                                               : body_rows(lines, nlines, width, &nrows);
@@ -389,7 +389,7 @@ static void commit_tool_result(tui *t, const char *name, const char *text, bool 
 
     if (diffs && ndiffs > 0) {
         size_t dn;
-        cage_body_line *dlines = diff_rows(diffs, ndiffs, &dn);
+        tiny_body_line *dlines = diff_rows(diffs, ndiffs, &dn);
         size_t dr;
         char **drows = render_rows(dlines, dn, width, &dr);
         tui_buf chrome;
@@ -455,8 +455,8 @@ static char *call_summary(const char *name, const char *arguments) {
 // ---- status ----------------------------------------------------------------
 
 static char *status_line(tui *t) {
-    char *usage = cage_context_usage_line(t->ctx_used, t->context_window, 0);
-    if (t->paused || t->phase == CAGE_PHASE_PAUSING) {
+    char *usage = tiny_context_usage_line(t->ctx_used, t->context_window, 0);
+    if (t->paused || t->phase == TINY_PHASE_PAUSING) {
         tui_buf b;
         buf_init(&b);
         fg_dim(&b, "paused - type steering, Enter to submit");
@@ -465,14 +465,14 @@ static char *status_line(tui *t) {
         free(usage);
         return buf_steal(&b);
     }
-    if (!t->active || t->phase == CAGE_PHASE_IDLE) return usage;
+    if (!t->active || t->phase == TINY_PHASE_IDLE) return usage;
 
     const char *label;
     char buf[128];
     switch (t->phase) {
-    case CAGE_PHASE_PREPARING: label = "preparing"; break;
-    case CAGE_PHASE_WAITING_MODEL: label = "waiting for provider"; break;
-    case CAGE_PHASE_STREAMING:
+    case TINY_PHASE_PREPARING: label = "preparing"; break;
+    case TINY_PHASE_WAITING_MODEL: label = "waiting for provider"; break;
+    case TINY_PHASE_STREAMING:
         if (t->writing_tool) {
             snprintf(buf, sizeof buf, "writing %s", t->writing_tool);
             label = buf;
@@ -480,7 +480,7 @@ static char *status_line(tui *t) {
             label = "streaming";
         }
         break;
-    case CAGE_PHASE_RUNNING_TOOL:
+    case TINY_PHASE_RUNNING_TOOL:
         snprintf(buf, sizeof buf, "running %s", t->detail ? t->detail : "tool");
         label = buf;
         break;
@@ -539,18 +539,18 @@ static void tui_render_locked(tui *t) {
 
     char *status = status_line(t);
     size_t nstatus;
-    char **status_rows = cage_wrap_line(status, width, &nstatus);
+    char **status_rows = tiny_wrap_line(status, width, &nstatus);
     free(status);
 
     size_t ninf;
-    cage_body_line *infl = cage_mdstream_pending(&t->reply, &ninf);
+    tiny_body_line *infl = tiny_mdstream_pending(&t->reply, &ninf);
     if (ninf == 0) {
-        cage_body_lines_free(infl, ninf);
-        infl = cage_tailstream_pending(&t->activity, &ninf);
+        tiny_body_lines_free(infl, ninf);
+        infl = tiny_tailstream_pending(&t->activity, &ninf);
     }
     size_t nrows;
     char **rows = render_rows(infl, ninf, width, &nrows);
-    cage_body_lines_free(infl, ninf);
+    tiny_body_lines_free(infl, ninf);
 
     int keep = height - (int)nstatus - 1;
     if (keep < 0) keep = 0;
@@ -559,7 +559,7 @@ static void tui_render_locked(tui *t) {
 
     int ed_max = height - (int)nstatus - keep;
     if (ed_max < 1) ed_max = 1;
-    cage_editor_view ev = cage_editor_render(t->editor, width, ed_max);
+    tiny_editor_view ev = tiny_editor_render(t->editor, width, ed_max);
 
     size_t total = nstatus + (size_t)keep + ev.nrows;
     char **lines = xmalloc((total ? total : 1) * sizeof *lines);
@@ -591,7 +591,7 @@ static void tui_render_locked(tui *t) {
     tui_buf frame;
     buf_init(&frame);
     live_draw(t, &frame, lines, total, cursor_row, ev.cursor_col, above.data ? above.data : "");
-    cage_write_all(t->out_fd, frame.data, frame.len);
+    tiny_write_all(t->out_fd, frame.data, frame.len);
     buf_free(&frame);
     buf_free(&above);
     free(scroll);
@@ -608,11 +608,11 @@ static void tui_render_locked(tui *t) {
 // ---- events ----------------------------------------------------------------
 
 static void activity_reset(tui *t) {
-    cage_tailstream_reset(&t->activity);
+    tiny_tailstream_reset(&t->activity);
 }
 
 static void end_turn(tui *t, const char *line) {
-    t->phase = CAGE_PHASE_IDLE;
+    t->phase = TINY_PHASE_IDLE;
     free(t->detail);
     t->detail = NULL;
     free(t->writing_tool);
@@ -620,9 +620,9 @@ static void end_turn(tui *t, const char *line) {
     t->paused = false;
     activity_reset(t);
     size_t n;
-    cage_body_line *lines = cage_mdstream_flush(&t->reply, &n);
+    tiny_body_line *lines = tiny_mdstream_flush(&t->reply, &n);
     commit_lines(t, lines, n);
-    cage_body_lines_free(lines, n);
+    tiny_body_lines_free(lines, n);
     flush_calls(t);
     t->separator = true;
     push(t, line);
@@ -669,9 +669,9 @@ static void message_text_usage(const char *json, char **text_out, long *total_ou
 static void commit_message(tui *t, const char *json) {
     activity_reset(t);
     size_t n;
-    cage_body_line *lines = cage_mdstream_flush(&t->reply, &n);
+    tiny_body_line *lines = tiny_mdstream_flush(&t->reply, &n);
     commit_lines(t, lines, n);
-    cage_body_lines_free(lines, n);
+    tiny_body_lines_free(lines, n);
 
     char *text;
     long total;
@@ -685,30 +685,30 @@ static void commit_message(tui *t, const char *json) {
     while (text[nt] == ' ' || text[nt] == '\t' || text[nt] == '\n') nt++;
     if (text[nt] != '\0' && !strstr(t->streamed, text)) {
         size_t fn;
-        cage_body_line *fed = cage_mdstream_feed(&t->reply, text, &fn);
+        tiny_body_line *fed = tiny_mdstream_feed(&t->reply, text, &fn);
         commit_lines(t, fed, fn);
-        cage_body_lines_free(fed, fn);
+        tiny_body_lines_free(fed, fn);
         size_t mn;
-        cage_body_line *more = cage_mdstream_flush(&t->reply, &mn);
+        tiny_body_line *more = tiny_mdstream_flush(&t->reply, &mn);
         commit_lines(t, more, mn);
-        cage_body_lines_free(more, mn);
+        tiny_body_lines_free(more, mn);
     }
     free(text);
     if (t->streamed) t->streamed[0] = '\0';
 }
 
-static void on_event(const cage_event *e, void *user) {
+static void on_event(const tiny_event *e, void *user) {
     tui *t = user;
     if (t->closed) return;
     pthread_mutex_lock(&t->lock);
     switch (e->type) {
-    case CAGE_EVENT_PHASE:
+    case TINY_EVENT_PHASE:
         t->phase = e->u.phase.phase;
         free(t->detail);
         t->detail = e->u.phase.detail ? xstrdup(e->u.phase.detail) : NULL;
-        if (e->u.phase.phase == CAGE_PHASE_PAUSING) t->paused = true;
+        if (e->u.phase.phase == TINY_PHASE_PAUSING) t->paused = true;
         break;
-    case CAGE_EVENT_TEXT: {
+    case TINY_EVENT_TEXT: {
         activity_reset(t);
         if (t->streamed) {
             size_t a = strlen(t->streamed), b = strlen(e->u.text.delta);
@@ -717,29 +717,29 @@ static void on_event(const cage_event *e, void *user) {
             memcpy(t->streamed + a, e->u.text.delta, b + 1);
         }
         size_t n;
-        cage_body_line *lines = cage_mdstream_feed(&t->reply, e->u.text.delta, &n);
+        tiny_body_line *lines = tiny_mdstream_feed(&t->reply, e->u.text.delta, &n);
         commit_lines(t, lines, n);
-        cage_body_lines_free(lines, n);
+        tiny_body_lines_free(lines, n);
         break;
     }
-    case CAGE_EVENT_REASONING: {
+    case TINY_EVENT_REASONING: {
         size_t np;
-        cage_body_line *p = cage_mdstream_pending(&t->reply, &np);
+        tiny_body_line *p = tiny_mdstream_pending(&t->reply, &np);
         bool empty = (np == 0);
-        cage_body_lines_free(p, np);
+        tiny_body_lines_free(p, np);
         if (empty) {
             size_t z;
-            cage_tailstream_feed(&t->activity, e->u.reasoning.delta, &z);
+            tiny_tailstream_feed(&t->activity, e->u.reasoning.delta, &z);
         }
         break;
     }
-    case CAGE_EVENT_TOOL_CALL: {
+    case TINY_EVENT_TOOL_CALL: {
         free(t->writing_tool);
         t->writing_tool = NULL;
         size_t n;
-        cage_body_line *lines = cage_mdstream_flush(&t->reply, &n);
+        tiny_body_line *lines = tiny_mdstream_flush(&t->reply, &n);
         commit_lines(t, lines, n);
-        cage_body_lines_free(lines, n);
+        tiny_body_lines_free(lines, n);
         activity_reset(t);
         tui_buf b;
         buf_init(&b);
@@ -758,18 +758,18 @@ static void on_event(const cage_event *e, void *user) {
         buf_free(&b);
         break;
     }
-    case CAGE_EVENT_TOOL_OUTPUT:
+    case TINY_EVENT_TOOL_OUTPUT:
         // Tool output is not streamed live; the result carries it.
         break;
-    case CAGE_EVENT_TOOL_RESULT:
+    case TINY_EVENT_TOOL_RESULT:
         activity_reset(t);
         commit_tool_result(t, e->u.tool_result.name, e->u.tool_result.text, e->u.tool_result.is_error,
                            e->u.tool_result.diffs, e->u.tool_result.diffs_len);
         break;
-    case CAGE_EVENT_MESSAGE:
+    case TINY_EVENT_MESSAGE:
         commit_message(t, e->u.message.json);
         break;
-    case CAGE_EVENT_ERROR: {
+    case TINY_EVENT_ERROR: {
         tui_buf p;
         buf_init(&p);
         buf_adds(&p, "! ");
@@ -781,17 +781,17 @@ static void on_event(const cage_event *e, void *user) {
         end_turn_buf(t, &b);
         break;
     }
-    case CAGE_EVENT_NO_MODEL:
+    case TINY_EVENT_NO_MODEL:
         end_turn(t, "\x1b[38;2;247;118;142m! no model configured\x1b[39m");
         break;
-    case CAGE_EVENT_CANCELLED: {
+    case TINY_EVENT_CANCELLED: {
         tui_buf b;
         buf_init(&b);
         fg_red(&b, "! cancelled");
         end_turn_buf(t, &b);
         break;
     }
-    case CAGE_EVENT_COMPLETE: {
+    case TINY_EVENT_COMPLETE: {
         tui_buf b;
         buf_init(&b);
         char text[64];
@@ -852,7 +852,7 @@ static char *request_steering(void *user) {
 static void command_write(void *user, char *line) {
     tui *t = user;
     t->separator = true;
-    cage_body_line bl = {line, NULL, NULL};
+    tiny_body_line bl = {line, NULL, NULL};
     size_t nrows;
     char **rows = render_rows(&bl, 1, t->width > 0 ? t->width : 1, &nrows);
     for (size_t i = 0; i < nrows; i++) push(t, rows[i]);
@@ -862,27 +862,27 @@ static void command_write(void *user, char *line) {
 
 static void command_new_session(void *user) {
     tui *t = user;
-    if (t->session) cage_session_close(t->session);
+    if (t->session) tiny_session_close(t->session);
     char title[256];
     const char *base = strrchr(t->c->cwd, '/');
     base = base ? base + 1 : t->c->cwd;
     snprintf(title, sizeof title, "%s", base[0] ? base : "session");
     char *err = NULL;
-    t->session = cage_session_open(t->c->cfg->sessions_dir, t->c->cwd, title, &err);
+    t->session = tiny_session_open(t->c->cfg->sessions_dir, t->c->cwd, title, &err);
     free(err);
     t->agent.session = t->session;
-    for (size_t i = 0; i < t->agent.messages_len; i++) cage_message_free(&t->agent.messages[i]);
+    for (size_t i = 0; i < t->agent.messages_len; i++) tiny_message_free(&t->agent.messages[i]);
     free(t->agent.messages);
     t->agent.messages = NULL;
     t->agent.messages_len = 0;
     t->ctx_used = 0;
 }
 
-// The one-line model banner: "cage · provider/model · effort".
+// The one-line model banner: "tiny · provider/model · effort".
 static char *model_line(tui *t) {
     tui_buf b;
     buf_init(&b);
-    buf_adds(&b, "cage · ");
+    buf_adds(&b, "tiny · ");
     buf_adds(&b, t->model.provider ? t->model.provider : "no provider");
     buf_addc(&b, '/');
     buf_adds(&b, t->model.model ? t->model.model : "no model");
@@ -895,7 +895,7 @@ static char *model_line(tui *t) {
 
 static long window_for(const char *provider, const char *model) {
     if (!provider || !model) return 0;
-    const cage_model_info *info = cage_catalog_lookup(cage_provider_canonical(provider), model);
+    const tiny_model_info *info = tiny_catalog_lookup(tiny_provider_canonical(provider), model);
     return info ? info->context_limit : 0;
 }
 
@@ -905,21 +905,21 @@ static int command_apply(void *user, const char *provider, const char *model,
                          const char *effort, char **err) {
     if (err) *err = NULL;
     tui *t = user;
-    cage_config *cfg = t->c->cfg;
+    tiny_config *cfg = t->c->cfg;
 
     const char *new_provider = provider ? provider : cfg->provider;
     const char *new_model = model ? model : cfg->model;
     const char *new_effort = effort ? effort : cfg->effort;
 
     // Validate by resolving against a shallow copy before touching anything.
-    cage_config probe = *cfg;
+    tiny_config probe = *cfg;
     probe.provider = (char *)new_provider;
     probe.model = (char *)new_model;
     probe.effort = (char *)new_effort;
-    cage_model resolved;
-    if (cage_resolve_model(&probe, &resolved, err) != 0) return -1;
+    tiny_model resolved;
+    if (tiny_resolve_model(&probe, &resolved, err) != 0) return -1;
 
-    if (cage_config_save(provider, model, effort, err) != 0) return -1;
+    if (tiny_config_save(provider, model, effort, err) != 0) return -1;
 
     if (provider) {
         free(cfg->provider);
@@ -934,10 +934,10 @@ static int command_apply(void *user, const char *provider, const char *model,
         cfg->effort = xstrdup(effort);
     }
 
-    if (cage_resolve_model(cfg, &t->model, err) != 0) return -1;
+    if (tiny_resolve_model(cfg, &t->model, err) != 0) return -1;
     t->agent.model = t->model;
     t->context_window = window_for(cfg->provider, cfg->model);
-    t->agent.tools = cage_tools(t->model.supports_images, &t->agent.tools_len);
+    t->agent.tools = tiny_tools(t->model.supports_images, &t->agent.tools_len);
 
     char *line = model_line(t);
     t->separator = true;
@@ -964,7 +964,7 @@ static void free_choice(tui *t) {
 // Commits one red line, for errors the choice flow reports.
 static void command_error(tui *t, const char *msg) {
     t->separator = true;
-    cage_body_line bl = {xstrdup(msg), fg_red, NULL};
+    tiny_body_line bl = {xstrdup(msg), fg_red, NULL};
     commit_lines(t, &bl, 1);
     free(bl.text);
     t->separator = true;
@@ -972,13 +972,13 @@ static void command_error(tui *t, const char *msg) {
 
 // Presents the options for `what` as a numbered list and arms the choice.
 // `provider` overrides the config provider for a model list.
-static void start_choose(tui *t, cage_choose what, const char *provider) {
+static void start_choose(tui *t, tiny_choose what, const char *provider) {
     free_choice(t);
     char **ids = NULL, **labels = NULL;
-    size_t n = cage_choose_list(t->c->cfg, what, provider, &ids, &labels);
+    size_t n = tiny_choose_list(t->c->cfg, what, provider, &ids, &labels);
     if (n == 0) {
-        const char *msg = what == CAGE_CHOOSE_MODEL ? "! select a provider first"
-                          : what == CAGE_CHOOSE_EFFORT ? "! no configurable effort for this model"
+        const char *msg = what == TINY_CHOOSE_MODEL ? "! select a provider first"
+                          : what == TINY_CHOOSE_EFFORT ? "! no configurable effort for this model"
                                                        : "! no providers configured";
         command_error(t, msg);
         return;
@@ -991,16 +991,16 @@ static void start_choose(tui *t, cage_choose what, const char *provider) {
     t->choice_n = n;
 
     // The heading and options are one block, so no blank line separates them.
-    char *title = cage_choose_title(t->c->cfg, what, provider);
+    char *title = tiny_choose_title(t->c->cfg, what, provider);
     size_t total = n + 1;
-    cage_body_line *lines = xmalloc(total * sizeof *lines);
-    lines[0] = (cage_body_line){title, NULL, NULL};
+    tiny_body_line *lines = xmalloc(total * sizeof *lines);
+    lines[0] = (tiny_body_line){title, NULL, NULL};
     for (size_t i = 0; i < n; i++) {
         tui_buf b;
         buf_init(&b);
         buf_addf(&b, "  %zu. ", i + 1);
         buf_adds(&b, labels[i]);
-        lines[i + 1] = (cage_body_line){buf_steal(&b), NULL, NULL};
+        lines[i + 1] = (tiny_body_line){buf_steal(&b), NULL, NULL};
         buf_free(&b);
     }
     t->separator = true;
@@ -1047,20 +1047,20 @@ static void resolve_choice(tui *t, const char *text) {
         return;
     }
 
-    cage_choose kind = t->choice_kind;
+    tiny_choose kind = t->choice_kind;
     char *id = xstrdup(chosen);
     char *provider = t->choice_provider ? xstrdup(t->choice_provider) : NULL;
     free(word);
     free_choice(t);
 
-    if (kind == CAGE_CHOOSE_PROVIDER) {
-        start_choose(t, CAGE_CHOOSE_MODEL, id);
+    if (kind == TINY_CHOOSE_PROVIDER) {
+        start_choose(t, TINY_CHOOSE_MODEL, id);
         free(id);
         return;
     }
 
     char *err = NULL;
-    int rc = kind == CAGE_CHOOSE_MODEL
+    int rc = kind == TINY_CHOOSE_MODEL
         ? command_apply(t, provider, id, NULL, &err)
         : command_apply(t, NULL, NULL, id, &err);
     if (rc != 0) {
@@ -1076,12 +1076,12 @@ static void resolve_choice(tui *t, const char *text) {
     free(id);
 }
 
-static void command_choose(void *user, cage_choose what) {
+static void command_choose(void *user, tiny_choose what) {
     start_choose(user, what, NULL);
 }
 
-static void run_command(tui *t, const cage_command *cmd, const char *args) {
-    cage_command_ctx ctx = {
+static void run_command(tui *t, const tiny_command *cmd, const char *args) {
+    tiny_command_ctx ctx = {
         .user = t,
         .write = command_write,
         .new_session = command_new_session,
@@ -1104,7 +1104,7 @@ static void *worker_main(void *arg) {
     tui *t = a->t;
     char *text = a->text;
     free(a);
-    cage_agent_turn(&t->agent, text);
+    tiny_agent_turn(&t->agent, text);
     free(text);
     pthread_mutex_lock(&t->lock);
     t->active = false;
@@ -1124,7 +1124,7 @@ static void start_turn(tui *t, const char *text) {
     t->cancel = false;
     t->pause_requested = false;
     t->paused = false;
-    t->phase = CAGE_PHASE_PREPARING;
+    t->phase = TINY_PHASE_PREPARING;
     free(t->detail);
     t->detail = NULL;
     t->frame = 0;
@@ -1148,7 +1148,7 @@ static void start_turn(tui *t, const char *text) {
 // ---- input -----------------------------------------------------------------
 
 static void submit(tui *t) {
-    const char *raw = cage_editor_text(t->editor);
+    const char *raw = tiny_editor_text(t->editor);
     char *text = xstrdup(raw);
     if (t->active) {
         if (t->paused && t->steering_waiting) {
@@ -1156,7 +1156,7 @@ static void submit(tui *t) {
             t->steering_text = xstrdup(text);
             t->steering_waiting = false;
             pthread_cond_broadcast(&t->cv);
-            cage_editor_clear(t->editor);
+            tiny_editor_clear(t->editor);
             size_t len = strlen(text);
             size_t s = 0;
             while (s < len && (text[s] == ' ' || text[s] == '\t' || text[s] == '\n')) s++;
@@ -1169,7 +1169,7 @@ static void submit(tui *t) {
         return;
     }
     if (t->choice_active) {
-        cage_editor_clear(t->editor);
+        tiny_editor_clear(t->editor);
         resolve_choice(t, text);
         free(text);
         tui_render_locked(t);
@@ -1183,9 +1183,9 @@ static void submit(tui *t) {
         return;
     }
     const char *args = NULL;
-    const cage_command *cmd = cage_find_command(text, &args);
+    const tiny_command *cmd = tiny_find_command(text, &args);
     if (cmd) {
-        cage_editor_clear(t->editor);
+        tiny_editor_clear(t->editor);
         char *argcopy = xstrdup(args);
         run_command(t, cmd, argcopy);
         free(argcopy);
@@ -1193,7 +1193,7 @@ static void submit(tui *t) {
         tui_render_locked(t);
         return;
     }
-    cage_editor_clear(t->editor);
+    tiny_editor_clear(t->editor);
     commit_user(t, text);
     start_turn(t, text);
     free(text);
@@ -1206,47 +1206,47 @@ typedef struct {
 
 static char *complete_step(const char *word, void *user) {
     complete_ctx *c = user;
-    return cage_complete_path(word, c->cwd);
+    return tiny_complete_path(word, c->cwd);
 }
 
 static void handle_tab(tui *t) {
-    const char *draft = cage_editor_text(t->editor);
-    char *completed = cage_complete_command(draft);
+    const char *draft = tiny_editor_text(t->editor);
+    char *completed = tiny_complete_command(draft);
     if (completed) {
-        cage_editor_set_text(t->editor, completed);
+        tiny_editor_set_text(t->editor, completed);
         free(completed);
         return;
     }
     complete_ctx cc = {t->c->cwd};
-    cage_editor_complete_word(t->editor, complete_step, &cc);
+    tiny_editor_complete_word(t->editor, complete_step, &cc);
 }
 
-static void handle_key(tui *t, const cage_key *key) {
+static void handle_key(tui *t, const tiny_key *key) {
     pthread_mutex_lock(&t->lock);
     switch (key->type) {
-    case CAGE_KEY_EOF:
-        if (!t->active && cage_editor_text(t->editor)[0] == '\0') t->closed = true;
+    case TINY_KEY_EOF:
+        if (!t->active && tiny_editor_text(t->editor)[0] == '\0') t->closed = true;
         break;
-    case CAGE_KEY_INTERRUPT:
+    case TINY_KEY_INTERRUPT:
         if (t->active) {
             t->cancel = true;
             pthread_cond_broadcast(&t->cv);
         } else if (t->choice_active) {
             free_choice(t);
             command_error(t, "! cancelled");
-        } else if (cage_editor_text(t->editor)[0] != '\0') {
-            cage_editor_clear(t->editor);
+        } else if (tiny_editor_text(t->editor)[0] != '\0') {
+            tiny_editor_clear(t->editor);
         }
         break;
-    case CAGE_KEY_ESCAPE:
+    case TINY_KEY_ESCAPE:
         if (t->active && !t->paused) t->pause_requested = true;
         break;
-    case CAGE_KEY_TAB:
+    case TINY_KEY_TAB:
         handle_tab(t);
         break;
     default: {
-        cage_edit_result r = cage_editor_handle(t->editor, key);
-        if (r == CAGE_EDIT_SUBMIT) submit(t);
+        tiny_edit_result r = tiny_editor_handle(t->editor, key);
+        if (r == TINY_EDIT_SUBMIT) submit(t);
         break;
     }
     }
@@ -1254,7 +1254,7 @@ static void handle_key(tui *t, const cage_key *key) {
     pthread_mutex_unlock(&t->lock);
 }
 
-static void handle_key_cb(const cage_key *key, void *user) {
+static void handle_key_cb(const tiny_key *key, void *user) {
     handle_key(user, key);
 }
 
@@ -1285,7 +1285,7 @@ static void terminal_restore(tui *t) {
 // Pushes one styled line into scrollback.
 static void push_line(tui *t, char *text) {
     t->separator = true;
-    cage_body_line bl = {text, NULL, NULL};
+    tiny_body_line bl = {text, NULL, NULL};
     size_t nrows;
     char **rows = render_rows(&bl, 1, t->width > 0 ? t->width : 80, &nrows);
     for (size_t i = 0; i < nrows; i++) push(t, rows[i]);
@@ -1296,7 +1296,7 @@ static void push_line(tui *t, char *text) {
 
 static void push_banner(tui *t) {
     push_line(t, model_line(t));
-    const cage_resources *r = t->c->resources;
+    const tiny_resources *r = t->c->resources;
     if (!r) return;
     for (size_t i = 0; i < r->agent_files_len; i++) {
         tui_buf b;
@@ -1319,21 +1319,21 @@ static void push_banner(tui *t) {
     }
 }
 
-int cage_tui_run(const cage_tui_config *c) {
+int tiny_tui_run(const tiny_tui_config *c) {
     tui t;
     memset(&t, 0, sizeof t);
     t.c = c;
     t.in_fd = STDIN_FILENO;
     t.out_fd = STDOUT_FILENO;
-    t.editor = cage_editor_new();
-    cage_mdstream_init(&t.reply);
-    cage_tailstream_init(&t.activity);
+    t.editor = tiny_editor_new();
+    tiny_mdstream_init(&t.reply);
+    tiny_tailstream_init(&t.activity);
     buf_init(&t.scroll);
     pthread_mutex_init(&t.lock, NULL);
     pthread_cond_init(&t.cv, NULL);
-    t.parser = cage_key_parser_new();
+    t.parser = tiny_key_parser_new();
 
-    cage_theme_use(c->cfg->theme);
+    tiny_theme_use(c->cfg->theme);
 
     t.model = c->model;
     t.context_window = window_for(c->model.provider, c->model.model);
@@ -1345,18 +1345,18 @@ int cage_tui_run(const cage_tui_config *c) {
     base = base ? base + 1 : c->cwd;
     snprintf(title, sizeof title, "%s", base[0] ? base : "session");
     char *err = NULL;
-    t.session = cage_session_open(c->cfg->sessions_dir, c->cwd, title, &err);
+    t.session = tiny_session_open(c->cfg->sessions_dir, c->cwd, title, &err);
     if (!t.session) {
         fprintf(stderr, "%s\n", err ? err : "session error");
         free(err);
-        cage_editor_free(t.editor);
+        tiny_editor_free(t.editor);
         return 1;
     }
 
     size_t tools_len;
-    const cage_tool *tools = cage_tools(t.model.supports_images, &tools_len);
+    const tiny_tool *tools = tiny_tools(t.model.supports_images, &tools_len);
 
-    t.agent = (cage_agent){
+    t.agent = (tiny_agent){
         .model = t.model,
         .system_prompt = c->resources ? c->resources->system_prompt : "",
         .tools = tools,
@@ -1380,7 +1380,7 @@ int cage_tui_run(const cage_tui_config *c) {
     terminal_raw(&t);
     if (isatty(t.out_fd)) {
         const char *enable = "\x1b[?2004h\x1b[>1u\x1b[?u";
-        cage_write_all(t.out_fd, enable, strlen(enable));
+        tiny_write_all(t.out_fd, enable, strlen(enable));
     }
 
     push_banner(&t);
@@ -1408,8 +1408,8 @@ int cage_tui_run(const cage_tui_config *c) {
                 // New data supersedes any held ESC or sequence.
                 t.esc_pending = false;
                 t.seq_pending = false;
-                cage_key_parser_feed(t.parser, buf, (size_t)n, handle_key_cb, &t);
-                int pend = cage_key_parser_pending(t.parser);
+                tiny_key_parser_feed(t.parser, buf, (size_t)n, handle_key_cb, &t);
+                int pend = tiny_key_parser_pending(t.parser);
                 if (pend == 1) {
                     t.esc_pending = true;
                     t.esc_deadline = monotonic_now() + 0.030;
@@ -1424,11 +1424,11 @@ int cage_tui_run(const cage_tui_config *c) {
         now = monotonic_now();
         if (t.esc_pending && now >= t.esc_deadline) {
             t.esc_pending = false;
-            cage_key_parser_flush_escape(t.parser, handle_key_cb, &t);
+            tiny_key_parser_flush_escape(t.parser, handle_key_cb, &t);
         }
         if (t.seq_pending && now >= t.seq_deadline) {
             t.seq_pending = false;
-            cage_key_parser_flush_sequence(t.parser);
+            tiny_key_parser_flush_sequence(t.parser);
         }
         pthread_mutex_lock(&t.lock);
         if (g_resize) {
@@ -1455,22 +1455,22 @@ int cage_tui_run(const cage_tui_config *c) {
     buf_init(&out);
     live_clear(&t, &out);
     if (t.scroll.data) buf_adds(&out, t.scroll.data);
-    cage_write_all(t.out_fd, out.data, out.len);
+    tiny_write_all(t.out_fd, out.data, out.len);
     buf_free(&out);
     buf_init(&t.scroll);
     pthread_mutex_unlock(&t.lock);
 
     if (isatty(t.out_fd)) {
         const char *disable = "\x1b[<u\x1b[?2004l";
-        cage_write_all(t.out_fd, disable, strlen(disable));
+        tiny_write_all(t.out_fd, disable, strlen(disable));
     }
     terminal_restore(&t);
 
-    if (t.session) cage_session_close(t.session);
-    cage_agent_free(&t.agent);
-    cage_editor_free(t.editor);
-    cage_mdstream_free(&t.reply);
-    cage_tailstream_free(&t.activity);
+    if (t.session) tiny_session_close(t.session);
+    tiny_agent_free(&t.agent);
+    tiny_editor_free(t.editor);
+    tiny_mdstream_free(&t.reply);
+    tiny_tailstream_free(&t.activity);
     for (size_t i = 0; i < t.pending_calls.n; i++) free(t.pending_calls.v[i].text);
     free(t.pending_calls.v);
     free_choice(&t);
@@ -1479,7 +1479,7 @@ int cage_tui_run(const cage_tui_config *c) {
     free(t.streamed);
     free(t.steering_text);
     buf_free(&t.scroll);
-    cage_key_parser_free(t.parser);
+    tiny_key_parser_free(t.parser);
     pthread_mutex_destroy(&t.lock);
     pthread_cond_destroy(&t.cv);
     return 0;

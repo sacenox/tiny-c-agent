@@ -10,7 +10,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
-char *cage_common_prefix(const char *a, const char *b) {
+char *tiny_common_prefix(const char *a, const char *b) {
     size_t i = 0;
     while (a[i] && b[i] && a[i] == b[i]) i++;
     char *out = malloc(i + 1);
@@ -32,7 +32,7 @@ static bool path_like(const char *w) {
     return false;
 }
 
-char *cage_complete_path(const char *word, const char *cwd) {
+char *tiny_complete_path(const char *word, const char *cwd) {
     if (!path_like(word)) return NULL;
 
     const char *slashp = strrchr(word, '/');
@@ -108,7 +108,7 @@ char *cage_complete_path(const char *word, const char *cwd) {
     } else if (n > 1) {
         char *shared = strdup(cands[0]);
         for (size_t i = 1; i < n; i++) {
-            char *next = cage_common_prefix(shared, cands[i]);
+            char *next = tiny_common_prefix(shared, cands[i]);
             free(shared);
             shared = next;
         }

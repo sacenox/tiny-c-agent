@@ -16,7 +16,7 @@
 // ---- request --------------------------------------------------------------
 
 static void add_image_block(yyjson_mut_doc *doc, yyjson_mut_val *content,
-                            const cage_block *b) {
+                            const tiny_block *b) {
     yyjson_mut_val *img = yyjson_mut_obj(doc);
     yyjson_mut_arr_add_val(content, img);
     yyjson_mut_obj_add_strcpy(doc, img, "type", "image");
@@ -27,7 +27,7 @@ static void add_image_block(yyjson_mut_doc *doc, yyjson_mut_val *content,
     yyjson_mut_obj_add_strcpy(doc, src, "data", b->data ? b->data : "");
 }
 
-static void add_tool_result(yyjson_mut_doc *doc, yyjson_mut_val *messages, const cage_message *m) {
+static void add_tool_result(yyjson_mut_doc *doc, yyjson_mut_val *messages, const tiny_message *m) {
     yyjson_mut_val *um = yyjson_mut_obj(doc);
     yyjson_mut_arr_add_val(messages, um);
     yyjson_mut_obj_add_strcpy(doc, um, "role", "user");
@@ -40,11 +40,11 @@ static void add_tool_result(yyjson_mut_doc *doc, yyjson_mut_val *messages, const
     yyjson_mut_obj_add_strcpy(doc, tr, "tool_use_id", m->tool_call_id ? m->tool_call_id : "");
     if (m->is_error) yyjson_mut_obj_add_bool(doc, tr, "is_error", true);
 
-    bool has_images = cage_message_has_image(m);
+    bool has_images = tiny_message_has_image(m);
     if (!has_images) {
-        cage_buf t = {0};
+        tiny_buf t = {0};
         for (size_t i = 0; i < m->blocks_len; i++)
-            if (m->blocks[i].type == CAGE_BLOCK_TEXT && m->blocks[i].text)
+            if (m->blocks[i].type == TINY_BLOCK_TEXT && m->blocks[i].text)
                 buf_add(&t, m->blocks[i].text, strlen(m->blocks[i].text));
         yyjson_mut_obj_add_strcpy(doc, tr, "content", t.data ? t.data : "");
         free(t.data);
@@ -53,34 +53,34 @@ static void add_tool_result(yyjson_mut_doc *doc, yyjson_mut_val *messages, const
     yyjson_mut_val *blocks = yyjson_mut_arr(doc);
     yyjson_mut_obj_add_val(doc, tr, "content", blocks);
     for (size_t i = 0; i < m->blocks_len; i++) {
-        const cage_block *b = &m->blocks[i];
-        if (b->type == CAGE_BLOCK_TEXT) {
+        const tiny_block *b = &m->blocks[i];
+        if (b->type == TINY_BLOCK_TEXT) {
             yyjson_mut_val *tx = yyjson_mut_obj(doc);
             yyjson_mut_arr_add_val(blocks, tx);
             yyjson_mut_obj_add_strcpy(doc, tx, "type", "text");
             yyjson_mut_obj_add_strcpy(doc, tx, "text", b->text ? b->text : "");
-        } else if (b->type == CAGE_BLOCK_IMAGE) {
+        } else if (b->type == TINY_BLOCK_IMAGE) {
             add_image_block(doc, blocks, b);
         }
     }
 }
 
-static void add_message(yyjson_mut_doc *doc, yyjson_mut_val *messages, const cage_message *m) {
+static void add_message(yyjson_mut_doc *doc, yyjson_mut_val *messages, const tiny_message *m) {
     yyjson_mut_val *o = yyjson_mut_obj(doc);
     yyjson_mut_arr_add_val(messages, o);
-    yyjson_mut_obj_add_strcpy(doc, o, "role", m->role == CAGE_ROLE_ASSISTANT ? "assistant" : "user");
+    yyjson_mut_obj_add_strcpy(doc, o, "role", m->role == TINY_ROLE_ASSISTANT ? "assistant" : "user");
     yyjson_mut_val *content = yyjson_mut_arr(doc);
     yyjson_mut_obj_add_val(doc, o, "content", content);
     for (size_t i = 0; i < m->blocks_len; i++) {
-        const cage_block *b = &m->blocks[i];
-        if (b->type == CAGE_BLOCK_TEXT) {
+        const tiny_block *b = &m->blocks[i];
+        if (b->type == TINY_BLOCK_TEXT) {
             yyjson_mut_val *tx = yyjson_mut_obj(doc);
             yyjson_mut_arr_add_val(content, tx);
             yyjson_mut_obj_add_strcpy(doc, tx, "type", "text");
             yyjson_mut_obj_add_strcpy(doc, tx, "text", b->text ? b->text : "");
-        } else if (b->type == CAGE_BLOCK_IMAGE) {
+        } else if (b->type == TINY_BLOCK_IMAGE) {
             add_image_block(doc, content, b);
-        } else if (b->type == CAGE_BLOCK_TOOL_CALL) {
+        } else if (b->type == TINY_BLOCK_TOOL_CALL) {
             yyjson_mut_val *tu = yyjson_mut_obj(doc);
             yyjson_mut_arr_add_val(content, tu);
             yyjson_mut_obj_add_strcpy(doc, tu, "type", "tool_use");
@@ -99,15 +99,15 @@ static void add_message(yyjson_mut_doc *doc, yyjson_mut_val *messages, const cag
     }
 }
 
-static void add_tools(yyjson_mut_doc *doc, yyjson_mut_val *root, const cage_context *ctx) {
+static void add_tools(yyjson_mut_doc *doc, yyjson_mut_val *root, const tiny_context *ctx) {
     if (ctx->tools_len == 0) return;
     yyjson_mut_val *tools = yyjson_mut_arr(doc);
     yyjson_mut_obj_add_val(doc, root, "tools", tools);
     for (size_t i = 0; i < ctx->tools_len; i++) {
-        const cage_tool *t = &ctx->tools[i];
+        const tiny_tool *t = &ctx->tools[i];
         yyjson_mut_val *tool = yyjson_mut_obj(doc);
         yyjson_mut_arr_add_val(tools, tool);
-        cage_json_tool(doc, tool, t, "input_schema");
+        tiny_json_tool(doc, tool, t, "input_schema");
     }
 }
 
@@ -123,8 +123,8 @@ static long budget_for(const char *effort) {
     return 0;
 }
 
-static char *build_request(const cage_model *model, const cage_context *ctx,
-                           const cage_stream_opts *opts) {
+static char *build_request(const tiny_model *model, const tiny_context *ctx,
+                           const tiny_stream_opts *opts) {
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
     yyjson_mut_val *root = yyjson_mut_obj(doc);
     yyjson_mut_doc_set_root(doc, root);
@@ -148,10 +148,10 @@ static char *build_request(const cage_model *model, const cage_context *ctx,
     yyjson_mut_val *messages = yyjson_mut_arr(doc);
     yyjson_mut_obj_add_val(doc, root, "messages", messages);
     for (size_t i = 0; i < ctx->messages_len;) {
-        if (ctx->messages[i].role == CAGE_ROLE_TOOL) {
+        if (ctx->messages[i].role == TINY_ROLE_TOOL) {
             // All results of one assistant turn share a single user message.
             size_t j = i;
-            for (; j < ctx->messages_len && ctx->messages[j].role == CAGE_ROLE_TOOL; j++)
+            for (; j < ctx->messages_len && ctx->messages[j].role == TINY_ROLE_TOOL; j++)
                 add_tool_result(doc, messages, &ctx->messages[j]);
             i = j;
         } else {
@@ -174,10 +174,10 @@ enum { BLK_TEXT, BLK_THINKING, BLK_TOOL };
 
 typedef struct {
     int type;
-    cage_buf text;
+    tiny_buf text;
     char *id;
     char *name;
-    cage_buf args;
+    tiny_buf args;
 } block_acc;
 
 typedef struct {
@@ -187,7 +187,7 @@ typedef struct {
     long tokens_out;
     char *stop_reason;
     char *error;
-    cage_stream_fn emit;
+    tiny_stream_fn emit;
     void *user;
 } anth_state;
 
@@ -215,7 +215,7 @@ static void on_data(const char *json, size_t len, void *user) {
     if (strcmp(type, "error") == 0) {
         yyjson_val *err = yyjson_obj_get(root, "error");
         yyjson_val *m = yyjson_is_obj(err) ? yyjson_obj_get(err, "message") : NULL;
-        cage_set_str(&st->error, yyjson_is_str(m) ? yyjson_get_str(m) : "stream: provider error");
+        tiny_set_str(&st->error, yyjson_is_str(m) ? yyjson_get_str(m) : "stream: provider error");
     } else if (strcmp(type, "message_start") == 0) {
         yyjson_val *msg = yyjson_obj_get(root, "message");
         yyjson_val *usage = yyjson_is_obj(msg) ? yyjson_obj_get(msg, "usage") : NULL;
@@ -238,8 +238,8 @@ static void on_data(const char *json, size_t len, void *user) {
             b->type = BLK_TOOL;
             yyjson_val *id = yyjson_obj_get(cb, "id");
             yyjson_val *nm = yyjson_obj_get(cb, "name");
-            if (yyjson_is_str(id)) cage_set_str(&b->id, yyjson_get_str(id));
-            if (yyjson_is_str(nm)) cage_set_str(&b->name, yyjson_get_str(nm));
+            if (yyjson_is_str(id)) tiny_set_str(&b->id, yyjson_get_str(id));
+            if (yyjson_is_str(nm)) tiny_set_str(&b->name, yyjson_get_str(nm));
         } else if (strcmp(bts, "thinking") == 0 || strcmp(bts, "redacted_thinking") == 0) {
             b->type = BLK_THINKING;
         } else {
@@ -264,13 +264,13 @@ static void on_data(const char *json, size_t len, void *user) {
             yyjson_val *t = yyjson_obj_get(d, "text");
             if (yyjson_is_str(t) && yyjson_get_str(t)[0]) {
                 buf_add(&b->text, yyjson_get_str(t), strlen(yyjson_get_str(t)));
-                cage_emit_delta(st->emit, st->user, CAGE_STREAM_TEXT_DELTA, yyjson_get_str(t));
+                tiny_emit_delta(st->emit, st->user, TINY_STREAM_TEXT_DELTA, yyjson_get_str(t));
             }
         } else if (strcmp(dts, "thinking_delta") == 0) {
             yyjson_val *t = yyjson_obj_get(d, "thinking");
             if (yyjson_is_str(t) && yyjson_get_str(t)[0]) {
                 buf_add(&b->text, yyjson_get_str(t), strlen(yyjson_get_str(t)));
-                cage_emit_delta(st->emit, st->user, CAGE_STREAM_REASONING_DELTA, yyjson_get_str(t));
+                tiny_emit_delta(st->emit, st->user, TINY_STREAM_REASONING_DELTA, yyjson_get_str(t));
             }
         } else if (strcmp(dts, "input_json_delta") == 0) {
             yyjson_val *p = yyjson_obj_get(d, "partial_json");
@@ -279,7 +279,7 @@ static void on_data(const char *json, size_t len, void *user) {
     } else if (strcmp(type, "message_delta") == 0) {
         yyjson_val *d = yyjson_obj_get(root, "delta");
         yyjson_val *sr = yyjson_is_obj(d) ? yyjson_obj_get(d, "stop_reason") : NULL;
-        if (yyjson_is_str(sr)) cage_set_str(&st->stop_reason, yyjson_get_str(sr));
+        if (yyjson_is_str(sr)) tiny_set_str(&st->stop_reason, yyjson_get_str(sr));
         yyjson_val *usage = yyjson_obj_get(root, "usage");
         if (yyjson_is_obj(usage)) {
             yyjson_val *v;
@@ -307,7 +307,7 @@ static const char *map_stop(const char *reason, bool has_calls) {
     return "stop";
 }
 
-static void finalize(anth_state *st, cage_message *out) {
+static void finalize(anth_state *st, tiny_message *out) {
     bool has_calls = false;
     for (size_t i = 0; i < st->blocks_len; i++) {
         block_acc *b = &st->blocks[i];
@@ -316,14 +316,14 @@ static void finalize(anth_state *st, cage_message *out) {
     for (size_t i = 0; i < st->blocks_len; i++) {
         block_acc *b = &st->blocks[i];
         if (b->type == BLK_THINKING)
-            cage_add_text_block(out, CAGE_BLOCK_THINKING, b->text.data);
+            tiny_add_text_block(out, TINY_BLOCK_THINKING, b->text.data);
         else if (b->type == BLK_TEXT)
-            cage_add_text_block(out, CAGE_BLOCK_TEXT, b->text.data);
+            tiny_add_text_block(out, TINY_BLOCK_TEXT, b->text.data);
     }
     for (size_t i = 0; i < st->blocks_len; i++) {
         block_acc *b = &st->blocks[i];
         if (b->type != BLK_TOOL) continue;
-        cage_add_tool_block(out, b->id, b->name, b->args.len ? b->args.data : NULL, st->emit, st->user);
+        tiny_add_tool_block(out, b->id, b->name, b->args.len ? b->args.data : NULL, st->emit, st->user);
     }
     out->tokens_in = st->tokens_in;
     out->tokens_out = st->tokens_out;
@@ -334,21 +334,21 @@ static void finalize(anth_state *st, cage_message *out) {
 // ---- transport ------------------------------------------------------------
 
 
-int cage_anthropic_messages_stream(const cage_model *model, const cage_context *ctx,
-                                   const cage_stream_opts *opts,
-                                   cage_stream_fn emit, void *user,
+int tiny_anthropic_messages_stream(const tiny_model *model, const tiny_context *ctx,
+                                   const tiny_stream_opts *opts,
+                                   tiny_stream_fn emit, void *user,
                                    const volatile bool *cancel,
-                                   cage_message *out, char **err) {
+                                   tiny_message *out, char **err) {
     if (err) *err = NULL;
     memset(out, 0, sizeof *out);
-    out->role = CAGE_ROLE_ASSISTANT;
+    out->role = TINY_ROLE_ASSISTANT;
 
-    char *url = cage_url_endpoint(model->base_url, "v1/messages");
-    if (!url) return cage_fail(err, "provider: no base url");
+    char *url = tiny_url_endpoint(model->base_url, "v1/messages");
+    if (!url) return tiny_fail(err, "provider: no base url");
     char *body = build_request(model, ctx, opts);
     if (!body) {
         free(url);
-        return cage_fail(err, "provider: cannot build request");
+        return tiny_fail(err, "provider: cannot build request");
     }
 
     anth_state st = {0};
@@ -356,15 +356,15 @@ int cage_anthropic_messages_stream(const cage_model *model, const cage_context *
     st.user = user;
 
     const char *extra[] = {"anthropic-version: " ANTHROPIC_VERSION, NULL};
-    cage_api_result r = cage_api_post(url, body, "x-api-key: ", model->api_key,
+    tiny_api_result r = tiny_api_post(url, body, "x-api-key: ", model->api_key,
                                       extra, cancel, on_data, &st, st.error, err);
 
     int rc = 0;
-    if (r == CAGE_API_ABORTED) {
+    if (r == TINY_API_ABORTED) {
         out->stop_reason = xstrdup("aborted");
-    } else if (r == CAGE_API_TRANSPORT_ERROR) {
+    } else if (r == TINY_API_TRANSPORT_ERROR) {
         rc = -1;
-    } else if (r == CAGE_API_STREAM_ERROR) {
+    } else if (r == TINY_API_STREAM_ERROR) {
         out->stop_reason = xstrdup("error");
         out->error_message = xstrdup(st.error);
     } else {

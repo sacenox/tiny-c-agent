@@ -1,4 +1,4 @@
-# cage - config-first agent for the terminal.
+# tiny-c-agent - config-first agent for the terminal.
 #
 #   make          build
 #   make deps     report build dependencies
@@ -11,7 +11,7 @@ OPT     ?= -O2 -g
 WARN    := -Wall -Wextra -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wpointer-arith
 
 BUILD   := build
-BIN     := $(BUILD)/cage
+BIN     := $(BUILD)/tiny
 
 PKGS    := libcurl yyjson tree-sitter \
            tree-sitter-javascript tree-sitter-bash \

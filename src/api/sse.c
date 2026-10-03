@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static void add(cage_sse *s, const char *p, size_t n) {
+static void add(tiny_sse *s, const char *p, size_t n) {
     if (s->pending_len + n + 1 > s->pending_cap) {
         size_t cap = s->pending_cap ? s->pending_cap : 128;
         while (cap < s->pending_len + n + 1) cap *= 2;
@@ -16,18 +16,18 @@ static void add(cage_sse *s, const char *p, size_t n) {
     s->pending[s->pending_len] = '\0';
 }
 
-void cage_sse_init(cage_sse *s) {
+void tiny_sse_init(tiny_sse *s) {
     s->pending = NULL;
     s->pending_len = 0;
     s->pending_cap = 0;
 }
 
-void cage_sse_free(cage_sse *s) {
+void tiny_sse_free(tiny_sse *s) {
     free(s->pending);
-    cage_sse_init(s);
+    tiny_sse_init(s);
 }
 
-static void handle_line(cage_sse_fn fn, void *user, const char *line, size_t len) {
+static void handle_line(tiny_sse_fn fn, void *user, const char *line, size_t len) {
     if (len < 5 || memcmp(line, "data:", 5) != 0) return;
     const char *p = line + 5;
     const char *end = line + len;
@@ -36,7 +36,7 @@ static void handle_line(cage_sse_fn fn, void *user, const char *line, size_t len
     if (end > p) fn(p, (size_t)(end - p), user);
 }
 
-void cage_sse_feed(cage_sse *s, const char *data, size_t n, cage_sse_fn fn, void *user) {
+void tiny_sse_feed(tiny_sse *s, const char *data, size_t n, tiny_sse_fn fn, void *user) {
     add(s, data, n);
     size_t start = 0;
     for (size_t i = 0; i < s->pending_len; i++) {

@@ -19,7 +19,7 @@ static void add_text_part(yyjson_mut_doc *doc, yyjson_mut_val *parts, const char
     yyjson_mut_obj_add_strcpy(doc, p, "text", text ? text : "");
 }
 
-static void add_function_call(yyjson_mut_doc *doc, yyjson_mut_val *parts, const cage_block *b) {
+static void add_function_call(yyjson_mut_doc *doc, yyjson_mut_val *parts, const tiny_block *b) {
     yyjson_mut_val *p = yyjson_mut_obj(doc);
     yyjson_mut_arr_add_val(parts, p);
     yyjson_mut_val *fc = yyjson_mut_obj(doc);
@@ -34,36 +34,36 @@ static void add_function_call(yyjson_mut_doc *doc, yyjson_mut_val *parts, const 
     if (adoc) yyjson_doc_free(adoc);
 }
 
-static void add_message(yyjson_mut_doc *doc, yyjson_mut_val *contents, const cage_message *m) {
+static void add_message(yyjson_mut_doc *doc, yyjson_mut_val *contents, const tiny_message *m) {
     yyjson_mut_val *o = yyjson_mut_obj(doc);
     yyjson_mut_arr_add_val(contents, o);
-    yyjson_mut_obj_add_strcpy(doc, o, "role", m->role == CAGE_ROLE_ASSISTANT ? "model" : "user");
+    yyjson_mut_obj_add_strcpy(doc, o, "role", m->role == TINY_ROLE_ASSISTANT ? "model" : "user");
     yyjson_mut_val *parts = yyjson_mut_arr(doc);
     yyjson_mut_obj_add_val(doc, o, "parts", parts);
     for (size_t i = 0; i < m->blocks_len; i++) {
-        const cage_block *b = &m->blocks[i];
-        if (b->type == CAGE_BLOCK_TEXT) {
+        const tiny_block *b = &m->blocks[i];
+        if (b->type == TINY_BLOCK_TEXT) {
             add_text_part(doc, parts, b->text);
-        } else if (b->type == CAGE_BLOCK_IMAGE) {
+        } else if (b->type == TINY_BLOCK_IMAGE) {
             yyjson_mut_val *p = yyjson_mut_obj(doc);
             yyjson_mut_arr_add_val(parts, p);
             yyjson_mut_val *inl = yyjson_mut_obj(doc);
             yyjson_mut_obj_add_val(doc, p, "inlineData", inl);
             yyjson_mut_obj_add_strcpy(doc, inl, "mimeType", b->media_type ? b->media_type : "");
             yyjson_mut_obj_add_strcpy(doc, inl, "data", b->data ? b->data : "");
-        } else if (b->type == CAGE_BLOCK_TOOL_CALL) {
+        } else if (b->type == TINY_BLOCK_TOOL_CALL) {
             add_function_call(doc, parts, b);
         }
     }
 }
 
 // A run of tool results becomes one user turn of functionResponse parts.
-static const char *tool_name_for(const cage_context *ctx, const char *id) {
+static const char *tool_name_for(const tiny_context *ctx, const char *id) {
     for (size_t i = 0; i < ctx->messages_len; i++) {
-        const cage_message *m = &ctx->messages[i];
+        const tiny_message *m = &ctx->messages[i];
         for (size_t k = 0; k < m->blocks_len; k++) {
-            const cage_block *b = &m->blocks[k];
-            if (b->type == CAGE_BLOCK_TOOL_CALL && b->tool_call_id && id &&
+            const tiny_block *b = &m->blocks[k];
+            if (b->type == TINY_BLOCK_TOOL_CALL && b->tool_call_id && id &&
                 strcmp(b->tool_call_id, id) == 0)
                 return b->tool_name ? b->tool_name : "";
         }
@@ -72,15 +72,15 @@ static const char *tool_name_for(const cage_context *ctx, const char *id) {
 }
 
 static void add_tool_results(yyjson_mut_doc *doc, yyjson_mut_val *contents,
-                             const cage_context *ctx, size_t from, size_t to) {
+                             const tiny_context *ctx, size_t from, size_t to) {
     yyjson_mut_val *o = yyjson_mut_obj(doc);
     yyjson_mut_arr_add_val(contents, o);
     yyjson_mut_obj_add_strcpy(doc, o, "role", "user");
     yyjson_mut_val *parts = yyjson_mut_arr(doc);
     yyjson_mut_obj_add_val(doc, o, "parts", parts);
     for (size_t i = from; i < to; i++) {
-        const cage_message *m = &ctx->messages[i];
-        char *t = cage_message_text(m);
+        const tiny_message *m = &ctx->messages[i];
+        char *t = tiny_message_text(m);
         yyjson_mut_val *p = yyjson_mut_obj(doc);
         yyjson_mut_arr_add_val(parts, p);
         yyjson_mut_val *fr = yyjson_mut_obj(doc);
@@ -93,7 +93,7 @@ static void add_tool_results(yyjson_mut_doc *doc, yyjson_mut_val *contents,
     }
 }
 
-static void add_tools(yyjson_mut_doc *doc, yyjson_mut_val *root, const cage_context *ctx) {
+static void add_tools(yyjson_mut_doc *doc, yyjson_mut_val *root, const tiny_context *ctx) {
     if (ctx->tools_len == 0) return;
     yyjson_mut_val *tools = yyjson_mut_arr(doc);
     yyjson_mut_obj_add_val(doc, root, "tools", tools);
@@ -104,7 +104,7 @@ static void add_tools(yyjson_mut_doc *doc, yyjson_mut_val *root, const cage_cont
     for (size_t i = 0; i < ctx->tools_len; i++) {
         yyjson_mut_val *d = yyjson_mut_obj(doc);
         yyjson_mut_arr_add_val(decls, d);
-        cage_json_tool(doc, d, &ctx->tools[i], "parametersJsonSchema");
+        tiny_json_tool(doc, d, &ctx->tools[i], "parametersJsonSchema");
     }
 }
 
@@ -120,7 +120,7 @@ static long budget_for(const char *effort) {
     return -1;
 }
 
-static char *build_request(const cage_context *ctx, const cage_stream_opts *opts) {
+static char *build_request(const tiny_context *ctx, const tiny_stream_opts *opts) {
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
     yyjson_mut_val *root = yyjson_mut_obj(doc);
     yyjson_mut_doc_set_root(doc, root);
@@ -128,9 +128,9 @@ static char *build_request(const cage_context *ctx, const cage_stream_opts *opts
     yyjson_mut_val *contents = yyjson_mut_arr(doc);
     yyjson_mut_obj_add_val(doc, root, "contents", contents);
     for (size_t i = 0; i < ctx->messages_len;) {
-        if (ctx->messages[i].role == CAGE_ROLE_TOOL) {
+        if (ctx->messages[i].role == TINY_ROLE_TOOL) {
             size_t j = i;
-            for (; j < ctx->messages_len && ctx->messages[j].role == CAGE_ROLE_TOOL; j++) {}
+            for (; j < ctx->messages_len && ctx->messages[j].role == TINY_ROLE_TOOL; j++) {}
             add_tool_results(doc, contents, ctx, i, j);
             i = j;
         } else {
@@ -175,12 +175,12 @@ static char *build_request(const cage_context *ctx, const cage_stream_opts *opts
 typedef struct {
     char *id;
     char *name;
-    cage_buf args;
+    tiny_buf args;
 } gcall;
 
 typedef struct {
-    cage_buf text;
-    cage_buf reasoning;
+    tiny_buf text;
+    tiny_buf reasoning;
     gcall *calls;
     size_t calls_len;
     long tokens_in;
@@ -188,7 +188,7 @@ typedef struct {
     long tokens_total;
     char *finish;
     char *error;
-    cage_stream_fn emit;
+    tiny_stream_fn emit;
     void *user;
 } google_state;
 
@@ -250,10 +250,10 @@ static void on_data(const char *json, size_t len, void *user) {
                 const char *s = yyjson_get_str(txt);
                 if (yyjson_is_bool(thought) && yyjson_get_bool(thought)) {
                     buf_add(&st->reasoning, s, strlen(s));
-                    cage_emit_delta(st->emit, st->user, CAGE_STREAM_REASONING_DELTA, s);
+                    tiny_emit_delta(st->emit, st->user, TINY_STREAM_REASONING_DELTA, s);
                 } else {
                     buf_add(&st->text, s, strlen(s));
-                    cage_emit_delta(st->emit, st->user, CAGE_STREAM_TEXT_DELTA, s);
+                    tiny_emit_delta(st->emit, st->user, TINY_STREAM_TEXT_DELTA, s);
                 }
             }
         }
@@ -288,12 +288,12 @@ static void free_state(google_state *st) {
     free(st->error);
 }
 
-static void finalize(google_state *st, cage_message *out) {
-    cage_add_text_block(out, CAGE_BLOCK_THINKING, st->reasoning.data);
-    cage_add_text_block(out, CAGE_BLOCK_TEXT, st->text.data);
+static void finalize(google_state *st, tiny_message *out) {
+    tiny_add_text_block(out, TINY_BLOCK_THINKING, st->reasoning.data);
+    tiny_add_text_block(out, TINY_BLOCK_TEXT, st->text.data);
     for (size_t i = 0; i < st->calls_len; i++) {
         gcall *c = &st->calls[i];
-        cage_add_tool_block(out, c->id, c->name, c->args.len ? c->args.data : NULL, st->emit, st->user);
+        tiny_add_tool_block(out, c->id, c->name, c->args.len ? c->args.data : NULL, st->emit, st->user);
     }
     out->tokens_in = st->tokens_in;
     out->tokens_out = st->tokens_out;
@@ -324,36 +324,36 @@ static char *endpoint_url(const char *base, const char *model) {
     return url;
 }
 
-int cage_google_generative_ai_stream(const cage_model *model, const cage_context *ctx,
-                                     const cage_stream_opts *opts,
-                                     cage_stream_fn emit, void *user,
+int tiny_google_generative_ai_stream(const tiny_model *model, const tiny_context *ctx,
+                                     const tiny_stream_opts *opts,
+                                     tiny_stream_fn emit, void *user,
                                      const volatile bool *cancel,
-                                     cage_message *out, char **err) {
+                                     tiny_message *out, char **err) {
     if (err) *err = NULL;
     memset(out, 0, sizeof *out);
-    out->role = CAGE_ROLE_ASSISTANT;
+    out->role = TINY_ROLE_ASSISTANT;
 
     char *url = endpoint_url(model->base_url, model->model);
-    if (!url) return cage_fail(err, "provider: no base url");
+    if (!url) return tiny_fail(err, "provider: no base url");
     char *body = build_request(ctx, opts);
     if (!body) {
         free(url);
-        return cage_fail(err, "provider: cannot build request");
+        return tiny_fail(err, "provider: cannot build request");
     }
 
     google_state st = {0};
     st.emit = emit;
     st.user = user;
 
-    cage_api_result r = cage_api_post(url, body, "x-goog-api-key: ", model->api_key,
+    tiny_api_result r = tiny_api_post(url, body, "x-goog-api-key: ", model->api_key,
                                       NULL, cancel, on_data, &st, st.error, err);
 
     int rc = 0;
-    if (r == CAGE_API_ABORTED) {
+    if (r == TINY_API_ABORTED) {
         out->stop_reason = xstrdup("aborted");
-    } else if (r == CAGE_API_TRANSPORT_ERROR) {
+    } else if (r == TINY_API_TRANSPORT_ERROR) {
         rc = -1;
-    } else if (r == CAGE_API_STREAM_ERROR) {
+    } else if (r == TINY_API_STREAM_ERROR) {
         out->stop_reason = xstrdup("error");
         out->error_message = xstrdup(st.error);
     } else {

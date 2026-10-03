@@ -34,23 +34,23 @@ char *xstrdup(const char *s) {
     return p;
 }
 
-void buf_init(cage_buf *b) {
+void buf_init(tiny_buf *b) {
     b->data = NULL;
     b->len = 0;
     b->cap = 0;
 }
 
-void buf_free(cage_buf *b) {
+void buf_free(tiny_buf *b) {
     free(b->data);
     buf_init(b);
 }
 
-void buf_clear(cage_buf *b) {
+void buf_clear(tiny_buf *b) {
     b->len = 0;
     if (b->data) b->data[0] = '\0';
 }
 
-void buf_reserve(cage_buf *b, size_t extra) {
+void buf_reserve(tiny_buf *b, size_t extra) {
     if (b->len + extra + 1 <= b->cap) return;
     size_t cap = b->cap ? b->cap : 64;
     while (cap < b->len + extra + 1) cap *= 2;
@@ -58,7 +58,7 @@ void buf_reserve(cage_buf *b, size_t extra) {
     b->cap = cap;
 }
 
-void buf_add(cage_buf *b, const void *p, size_t n) {
+void buf_add(tiny_buf *b, const void *p, size_t n) {
     if (n == 0) return;
     buf_reserve(b, n);
     memcpy(b->data + b->len, p, n);
@@ -66,15 +66,15 @@ void buf_add(cage_buf *b, const void *p, size_t n) {
     b->data[b->len] = '\0';
 }
 
-void buf_adds(cage_buf *b, const char *s) {
+void buf_adds(tiny_buf *b, const char *s) {
     buf_add(b, s, strlen(s));
 }
 
-void buf_addc(cage_buf *b, char c) {
+void buf_addc(tiny_buf *b, char c) {
     buf_add(b, &c, 1);
 }
 
-void buf_addf(cage_buf *b, const char *fmt, ...) {
+void buf_addf(tiny_buf *b, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     va_list ap2;
@@ -91,7 +91,7 @@ void buf_addf(cage_buf *b, const char *fmt, ...) {
     va_end(ap2);
 }
 
-char *buf_steal(cage_buf *b) {
+char *buf_steal(tiny_buf *b) {
     if (!b->data) return xstrdup("");
     char *d = b->data;
     b->data = NULL;
@@ -100,7 +100,7 @@ char *buf_steal(cage_buf *b) {
     return d;
 }
 
-void cage_set_error(char **err, const char *fmt, ...) {
+void tiny_set_error(char **err, const char *fmt, ...) {
     if (!err) return;
     char detail[512];
     va_list ap;
@@ -111,7 +111,7 @@ void cage_set_error(char **err, const char *fmt, ...) {
     *err = xstrdup(detail);
 }
 
-int cage_fail(char **err, const char *fmt, ...) {
+int tiny_fail(char **err, const char *fmt, ...) {
     if (err) {
         char detail[512];
         va_list ap;
@@ -124,7 +124,7 @@ int cage_fail(char **err, const char *fmt, ...) {
     return -1;
 }
 
-int cage_mkdirs(const char *path) {
+int tiny_mkdirs(const char *path) {
     char buf[4096];
     size_t len = strlen(path);
     if (len == 0 || len >= sizeof buf) {
@@ -142,7 +142,7 @@ int cage_mkdirs(const char *path) {
     return 0;
 }
 
-char *cage_path_join(const char *a, const char *b) {
+char *tiny_path_join(const char *a, const char *b) {
     size_t al = strlen(a);
     bool slash = al > 0 && a[al - 1] == '/';
     size_t n = al + strlen(b) + (slash ? 1 : 2);
@@ -151,7 +151,7 @@ char *cage_path_join(const char *a, const char *b) {
     return p;
 }
 
-char **cage_split_lines(const char *s, size_t *count) {
+char **tiny_split_lines(const char *s, size_t *count) {
     size_t cap = 8, n = 0;
     char **out = xmalloc(cap * sizeof *out);
     const char *p = s;
@@ -173,12 +173,12 @@ char **cage_split_lines(const char *s, size_t *count) {
     return out;
 }
 
-void cage_strv_free(char **v, size_t n) {
+void tiny_strv_free(char **v, size_t n) {
     for (size_t i = 0; i < n; i++) free(v[i]);
     free(v);
 }
 
-char *cage_trim_end(const char *s) {
+char *tiny_trim_end(const char *s) {
     size_t len = strlen(s);
     while (len > 0 && (s[len - 1] == '\n' || s[len - 1] == '\r')) len--;
     char *out = xmalloc(len + 1);
@@ -191,7 +191,7 @@ static bool is_space(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
-char *cage_trim(const char *s) {
+char *tiny_trim(const char *s) {
     while (is_space(*s)) s++;
     size_t n = strlen(s);
     while (n > 0 && is_space(s[n - 1])) n--;
@@ -201,12 +201,12 @@ char *cage_trim(const char *s) {
     return out;
 }
 
-void cage_set_str(char **dst, const char *src) {
+void tiny_set_str(char **dst, const char *src) {
     free(*dst);
     *dst = xstrdup(src ? src : "");
 }
 
-int cage_write_all(int fd, const char *buf, size_t len) {
+int tiny_write_all(int fd, const char *buf, size_t len) {
     while (len > 0) {
         ssize_t n = write(fd, buf, len);
         if (n < 0) {
@@ -219,7 +219,7 @@ int cage_write_all(int fd, const char *buf, size_t len) {
     return 0;
 }
 
-void cage_strv_push(char ***v, size_t *n, size_t *cap, char *s) {
+void tiny_strv_push(char ***v, size_t *n, size_t *cap, char *s) {
     if (*n == *cap) {
         *cap = *cap ? *cap * 2 : 8;
         *v = xrealloc(*v, *cap * sizeof **v);
@@ -227,16 +227,16 @@ void cage_strv_push(char ***v, size_t *n, size_t *cap, char *s) {
     (*v)[(*n)++] = s;
 }
 
-char *cage_read_file(const char *path) {
+char *tiny_read_file(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
-    char *s = cage_read_stream(f);
+    char *s = tiny_read_stream(f);
     fclose(f);
     return s;
 }
 
-char *cage_read_stream(FILE *f) {
-    cage_buf b;
+char *tiny_read_stream(FILE *f) {
+    tiny_buf b;
     buf_init(&b);
     char chunk[8192];
     size_t n;
@@ -244,7 +244,7 @@ char *cage_read_stream(FILE *f) {
     return buf_steal(&b);
 }
 
-char *cage_url_endpoint(const char *base, const char *path) {
+char *tiny_url_endpoint(const char *base, const char *path) {
     if (!base || !base[0]) return NULL;
     size_t n = strlen(base);
     bool slash = base[n - 1] == '/';

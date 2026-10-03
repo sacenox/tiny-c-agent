@@ -1,7 +1,7 @@
-// cage agent: the loop that binds provider, session, and tool.
+// tiny agent: the loop that binds provider, session, and tool.
 
-#ifndef CAGE_AGENT_H
-#define CAGE_AGENT_H
+#ifndef TINY_AGENT_H
+#define TINY_AGENT_H
 
 #include <stdbool.h>
 
@@ -12,16 +12,16 @@
 
 typedef struct {
     // Model and request shape.
-    cage_model model;
+    tiny_model model;
     const char *system_prompt;
-    const cage_tool *tools;
+    const tiny_tool *tools;
     size_t tools_len;
 
     // Persistence. NULL disables session logging.
-    cage_session *session;
+    tiny_session *session;
 
     // Projection. Both projections receive the same event stream.
-    cage_event_fn on_event;
+    tiny_event_fn on_event;
     void *user;
 
     // Interruption. All optional; NULL means the feature is absent.
@@ -31,16 +31,16 @@ typedef struct {
     const volatile bool *cancel;
 
     // Transcript, owned by the agent and kept across turns.
-    cage_message *messages;
+    tiny_message *messages;
     size_t messages_len;
-} cage_agent;
+} tiny_agent;
 
 // Appends `input` as a user message, then loops until the model stops without
 // tool calls. Every outcome is reported as an event: complete, cancelled, or
 // error. The caller owns `model`, `runtime`, `session`, and the tools.
-void cage_agent_turn(cage_agent *a, const char *input);
+void tiny_agent_turn(tiny_agent *a, const char *input);
 
 // Frees the transcript. Does not free the runtime, session, or model strings.
-void cage_agent_free(cage_agent *a);
+void tiny_agent_free(tiny_agent *a);
 
 #endif

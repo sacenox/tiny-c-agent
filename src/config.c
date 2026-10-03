@@ -18,7 +18,7 @@
 // A config value the user has not written yet. The partial form keeps every
 // field optional so a local config only overrides the keys it sets.
 typedef struct {
-    int theme;                  // -1 unset, otherwise a cage_theme.
+    int theme;                  // -1 unset, otherwise a tiny_theme.
     char *provider;
     char *model;
     char *effort;
@@ -28,7 +28,7 @@ typedef struct {
     size_t skills_dirs_len;
     bool skills_dirs_set;
     char *sessions_dir;
-    cage_provider *custom_providers;
+    tiny_provider *custom_providers;
     size_t custom_providers_len;
     bool custom_providers_set;
 } partial;
@@ -51,22 +51,22 @@ static char *config_file_path(void) {
     const char *base = getenv("XDG_CONFIG_HOME");
     char *dir;
     if (base && base[0]) {
-        dir = cage_path_join(base, "cage");
+        dir = tiny_path_join(base, "tiny");
     } else {
         const char *home = getenv("HOME");
         if (!home || !home[0]) return NULL;
-        dir = cage_path_join(home, ".config/cage");
+        dir = tiny_path_join(home, ".config/tiny");
     }
-    char *p = cage_path_join(dir, "config.json");
+    char *p = tiny_path_join(dir, "config.json");
     free(dir);
     return p;
 }
 
 static char *default_sessions_dir(void) {
     const char *state = getenv("XDG_STATE_HOME");
-    if (state && state[0]) return cage_path_join(state, "cage/sessions");
+    if (state && state[0]) return tiny_path_join(state, "tiny/sessions");
     const char *home = getenv("HOME");
-    if (home && home[0]) return cage_path_join(home, ".local/state/cage/sessions");
+    if (home && home[0]) return tiny_path_join(home, ".local/state/tiny/sessions");
     return xstrdup("sessions");
 }
 
@@ -79,11 +79,11 @@ static bool valid_effort(const char *s) {
     return false;
 }
 
-static bool parse_api(const char *s, cage_api *out) {
-    if (strcmp(s, "openai-completions") == 0) *out = CAGE_API_OPENAI_COMPLETIONS;
-    else if (strcmp(s, "openai-responses") == 0) *out = CAGE_API_OPENAI_RESPONSES;
-    else if (strcmp(s, "anthropic-messages") == 0) *out = CAGE_API_ANTHROPIC_MESSAGES;
-    else if (strcmp(s, "google-generative-ai") == 0) *out = CAGE_API_GOOGLE_GENERATIVE_AI;
+static bool parse_api(const char *s, tiny_api *out) {
+    if (strcmp(s, "openai-completions") == 0) *out = TINY_API_OPENAI_COMPLETIONS;
+    else if (strcmp(s, "openai-responses") == 0) *out = TINY_API_OPENAI_RESPONSES;
+    else if (strcmp(s, "anthropic-messages") == 0) *out = TINY_API_ANTHROPIC_MESSAGES;
+    else if (strcmp(s, "google-generative-ai") == 0) *out = TINY_API_GOOGLE_GENERATIVE_AI;
     else return false;
     return true;
 }
@@ -122,7 +122,7 @@ static int parse_str_array(yyjson_val *v, const char *key,
     return 0;
 }
 
-static void provider_free(cage_provider *p) {
+static void provider_free(tiny_provider *p) {
     free(p->id);
     free(p->name);
     free(p->base_url);
@@ -132,7 +132,7 @@ static void provider_free(cage_provider *p) {
 }
 
 static int parse_provider(yyjson_val *v, size_t idx, const char *path,
-                          cage_provider *out, char **err) {
+                          tiny_provider *out, char **err) {
     if (!yyjson_is_obj(v))
         return fail(err, path, "\"customProviders[%zu]\" must be an object", idx);
     if (opt_str(v, "id", &out->id, path, err) != 0) return -1;
@@ -165,8 +165,8 @@ static int parse_partial(yyjson_val *root, const char *path, partial *p, char **
     if (v) {
         if (!yyjson_is_str(v)) return fail(err, path, "\"theme\" must be a string");
         const char *s = yyjson_get_str(v);
-        if (strcmp(s, "tokyo-night") == 0) p->theme = CAGE_THEME_TOKYO_NIGHT;
-        else if (strcmp(s, "auto") == 0) p->theme = CAGE_THEME_AUTO;
+        if (strcmp(s, "tokyo-night") == 0) p->theme = TINY_THEME_TOKYO_NIGHT;
+        else if (strcmp(s, "auto") == 0) p->theme = TINY_THEME_AUTO;
         else return fail(err, path, "unknown theme \"%s\"", s);
     }
 
@@ -278,7 +278,7 @@ static void partial_free(partial *p) {
     free(p->custom_providers);
 }
 
-static void config_free_members(cage_config *cfg) {
+static void config_free_members(tiny_config *cfg) {
     free(cfg->provider);
     free(cfg->model);
     free(cfg->effort);
@@ -302,7 +302,7 @@ static char *dir_of(const char *path) {
     return d;
 }
 
-int cage_config_save(const char *provider, const char *model, const char *effort, char **err) {
+int tiny_config_save(const char *provider, const char *model, const char *effort, char **err) {
     if (err) *err = NULL;
     char *path = config_file_path();
     if (!path) {
@@ -368,8 +368,8 @@ int cage_config_save(const char *provider, const char *model, const char *effort
     }
 
     char *dir = dir_of(path);
-    if (cage_mkdirs(dir) != 0) {
-        cage_set_error(err, "cannot create %s: %s", dir, strerror(errno));
+    if (tiny_mkdirs(dir) != 0) {
+        tiny_set_error(err, "cannot create %s: %s", dir, strerror(errno));
         free(dir);
         free(body);
         free(path);
@@ -382,7 +382,7 @@ int cage_config_save(const char *provider, const char *model, const char *effort
     snprintf(temp, plen + 32, "%s.%d.tmp", path, (int)getpid());
     FILE *out = fopen(temp, "wb");
     if (!out) {
-        cage_set_error(err, "cannot write %s: %s", path, strerror(errno));
+        tiny_set_error(err, "cannot write %s: %s", path, strerror(errno));
         free(temp);
         free(body);
         free(path);
@@ -392,14 +392,14 @@ int cage_config_save(const char *provider, const char *model, const char *effort
     if (fclose(out) != 0) rc = -1;
     free(body);
     if (rc != 0) {
-        cage_set_error(err, "%s", "config write failed");
+        tiny_set_error(err, "%s", "config write failed");
         remove(temp);
         free(temp);
         free(path);
         return -1;
     }
     if (rename(temp, path) != 0) {
-        cage_set_error(err, "cannot replace %s: %s", path, strerror(errno));
+        tiny_set_error(err, "cannot replace %s: %s", path, strerror(errno));
         remove(temp);
         free(temp);
         free(path);
@@ -410,7 +410,7 @@ int cage_config_save(const char *provider, const char *model, const char *effort
     return 0;
 }
 
-cage_config *cage_config_load(const char *cli_path, char **err) {
+tiny_config *tiny_config_load(const char *cli_path, char **err) {
     if (err) *err = NULL;
 
     partial global = {.theme = -1, .discover_agent_files = -1};
@@ -427,8 +427,8 @@ cage_config *cage_config_load(const char *cli_path, char **err) {
     }
     merge_partial(&global, &local);
 
-    cage_config *cfg = xcalloc(1, sizeof *cfg);
-    cfg->theme = global.theme == -1 ? CAGE_THEME_TOKYO_NIGHT : (cage_theme)global.theme;
+    tiny_config *cfg = xcalloc(1, sizeof *cfg);
+    cfg->theme = global.theme == -1 ? TINY_THEME_TOKYO_NIGHT : (tiny_theme)global.theme;
     cfg->provider = global.provider;
     cfg->model = global.model;
     cfg->effort = global.effort;
@@ -452,7 +452,7 @@ cage_config *cage_config_load(const char *cli_path, char **err) {
     return cfg;
 }
 
-void cage_config_free(cage_config *cfg) {
+void tiny_config_free(tiny_config *cfg) {
     if (!cfg) return;
     config_free_members(cfg);
     free(cfg);

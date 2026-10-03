@@ -2,23 +2,23 @@
 
 #include <string.h>
 
-extern const cage_model_info cage_catalog_entries[];
-extern const size_t cage_catalog_entries_len;
+extern const tiny_model_info tiny_catalog_entries[];
+extern const size_t tiny_catalog_entries_len;
 
-const cage_model_info *cage_catalog_lookup(const char *provider, const char *model) {
+const tiny_model_info *tiny_catalog_lookup(const char *provider, const char *model) {
     if (!provider || !model) return NULL;
-    for (size_t i = 0; i < cage_catalog_entries_len; i++) {
-        const cage_model_info *e = &cage_catalog_entries[i];
+    for (size_t i = 0; i < tiny_catalog_entries_len; i++) {
+        const tiny_model_info *e = &tiny_catalog_entries[i];
         if (strcmp(e->provider, provider) == 0 && strcmp(e->id, model) == 0) return e;
     }
     return NULL;
 }
 
-size_t cage_catalog_count(void) { return cage_catalog_entries_len; }
+size_t tiny_catalog_count(void) { return tiny_catalog_entries_len; }
 
-const cage_model_info *cage_catalog_get(size_t index) {
-    if (index >= cage_catalog_entries_len) return NULL;
-    return &cage_catalog_entries[index];
+const tiny_model_info *tiny_catalog_get(size_t index) {
+    if (index >= tiny_catalog_entries_len) return NULL;
+    return &tiny_catalog_entries[index];
 }
 
 // Rank of an effort value on the off..max ladder. Both "off" and the catalog's
@@ -37,7 +37,7 @@ static const char *norm_effort(const char *v) {
     return strcmp(v, "none") == 0 ? "off" : v;
 }
 
-const char *cage_catalog_clamp_effort(const cage_model_info *info, const char *desired) {
+const char *tiny_catalog_clamp_effort(const tiny_model_info *info, const char *desired) {
     if (!desired) return NULL;
     if (!info) return desired;
     for (size_t i = 0; i < info->effort_len; i++)

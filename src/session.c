@@ -13,7 +13,7 @@
 
 #include "util.h"
 
-struct cage_session {
+struct tiny_session {
     int fd;
     char id[128];
     char path[PATH_MAX + 16];
@@ -69,22 +69,22 @@ static void slugify(const char *text, char *out, size_t cap) {
 }
 
 // Writes one line and fsyncs, so a committed record survives a crash.
-static int write_record(cage_session *s, const char *line, size_t len, char **err) {
-    if (cage_write_all(s->fd, line, len) != 0 || cage_write_all(s->fd, "\n", 1) != 0)
-        return cage_fail(err, "session %s: write failed: %s", s->path, strerror(errno));
+static int write_record(tiny_session *s, const char *line, size_t len, char **err) {
+    if (tiny_write_all(s->fd, line, len) != 0 || tiny_write_all(s->fd, "\n", 1) != 0)
+        return tiny_fail(err, "session %s: write failed: %s", s->path, strerror(errno));
     if (fsync(s->fd) != 0)
-        return cage_fail(err, "session %s: fsync failed: %s", s->path, strerror(errno));
+        return tiny_fail(err, "session %s: fsync failed: %s", s->path, strerror(errno));
     return 0;
 }
 
-cage_session *cage_session_open(const char *sessions_dir, const char *cwd,
+tiny_session *tiny_session_open(const char *sessions_dir, const char *cwd,
                                 const char *title, char **err) {
     if (err) *err = NULL;
 
     char slug[48];
     slugify(title ? title : "", slug, sizeof slug);
-    if (cage_mkdirs(sessions_dir) != 0) {
-        cage_fail(err, "session: cannot create %s: %s", sessions_dir, strerror(errno));
+    if (tiny_mkdirs(sessions_dir) != 0) {
+        tiny_fail(err, "session: cannot create %s: %s", sessions_dir, strerror(errno));
         return NULL;
     }
 
@@ -100,12 +100,12 @@ cage_session *cage_session_open(const char *sessions_dir, const char *cwd,
         snprintf(dir, sizeof dir, "%s/%s", sessions_dir, id);
         if (mkdir(dir, 0755) == 0) created = true;
         else if (errno != EEXIST) {
-            cage_fail(err, "session: cannot create %s: %s", dir, strerror(errno));
+            tiny_fail(err, "session: cannot create %s: %s", dir, strerror(errno));
             return NULL;
         }
     }
     if (!created) {
-        cage_fail(err, "session: could not create a unique directory in %s", sessions_dir);
+        tiny_fail(err, "session: could not create a unique directory in %s", sessions_dir);
         return NULL;
     }
 
@@ -113,11 +113,11 @@ cage_session *cage_session_open(const char *sessions_dir, const char *cwd,
     snprintf(log_path, sizeof log_path, "%s/session.jsonl", dir);
     int fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd < 0) {
-        cage_fail(err, "session: cannot open %s: %s", log_path, strerror(errno));
+        tiny_fail(err, "session: cannot open %s: %s", log_path, strerror(errno));
         return NULL;
     }
 
-    cage_session *s = xmalloc(sizeof *s);
+    tiny_session *s = xmalloc(sizeof *s);
     s->fd = fd;
     snprintf(s->id, sizeof s->id, "%s", id);
     snprintf(s->path, sizeof s->path, "%s", log_path);
@@ -137,7 +137,7 @@ cage_session *cage_session_open(const char *sessions_dir, const char *cwd,
     char *line = yyjson_mut_val_write(obj, 0, &len);
     yyjson_mut_doc_free(doc);
     if (!line) {
-        cage_fail(err, "session %s: cannot serialize header", s->path);
+        tiny_fail(err, "session %s: cannot serialize header", s->path);
         close(fd);
         free(s);
         return NULL;
@@ -153,21 +153,21 @@ cage_session *cage_session_open(const char *sessions_dir, const char *cwd,
     return s;
 }
 
-const char *cage_session_id(const cage_session *s) {
+const char *tiny_session_id(const tiny_session *s) {
     return s->id;
 }
 
-int cage_session_append(cage_session *s, yyjson_mut_val *record, char **err) {
+int tiny_session_append(tiny_session *s, yyjson_mut_val *record, char **err) {
     if (err) *err = NULL;
     size_t len = 0;
     char *line = yyjson_mut_val_write(record, 0, &len);
-    if (!line) return cage_fail(err, "session %s: cannot serialize record", s->path);
+    if (!line) return tiny_fail(err, "session %s: cannot serialize record", s->path);
     int rc = write_record(s, line, len, err);
     free(line);
     return rc;
 }
 
-void cage_session_close(cage_session *s) {
+void tiny_session_close(tiny_session *s) {
     if (!s) return;
     close(s->fd);
     free(s);

@@ -19,16 +19,16 @@ static void strv_free(char **v, size_t n) {
 
 // ---- body line lists -------------------------------------------------------
 
-void bl_push(cage_blist *l, char *text, cage_fg_fn style, const char *bg) {
+void bl_push(tiny_blist *l, char *text, tiny_fg_fn style, const char *bg) {
     if (l->n == l->cap) {
         l->cap = l->cap ? l->cap * 2 : 16;
         l->v = realloc(l->v, l->cap * sizeof *l->v);
         if (!l->v) abort();
     }
-    l->v[l->n++] = (cage_body_line){text, style, bg};
+    l->v[l->n++] = (tiny_body_line){text, style, bg};
 }
 
-cage_body_line *bl_take(cage_blist *l, size_t *count) {
+tiny_body_line *bl_take(tiny_blist *l, size_t *count) {
     *count = l->n;
     if (l->n == 0) {
         free(l->v);
@@ -37,7 +37,7 @@ cage_body_line *bl_take(cage_blist *l, size_t *count) {
     return l->v;
 }
 
-void cage_body_lines_free(cage_body_line *lines, size_t count) {
+void tiny_body_lines_free(tiny_body_line *lines, size_t count) {
     for (size_t i = 0; i < count; i++) free(lines[i].text);
     free(lines);
 }
@@ -87,12 +87,12 @@ static char *fence_close(const char *line) {
 
 // ---- markdown stream -------------------------------------------------------
 
-void cage_mdstream_init(cage_mdstream *s) {
+void tiny_mdstream_init(tiny_mdstream *s) {
     memset(s, 0, sizeof *s);
     s->rest = xstrdup("");
 }
 
-void cage_mdstream_free(cage_mdstream *s) {
+void tiny_mdstream_free(tiny_mdstream *s) {
     free(s->rest);
     free(s->fence_marker);
     free(s->fence_info);
@@ -103,7 +103,7 @@ void cage_mdstream_free(cage_mdstream *s) {
     memset(s, 0, sizeof *s);
 }
 
-void cage_mdstream_reset(cage_mdstream *s) {
+void tiny_mdstream_reset(tiny_mdstream *s) {
     free(s->rest);
     s->rest = xstrdup("");
     free(s->fence_marker);
@@ -115,7 +115,7 @@ void cage_mdstream_reset(cage_mdstream *s) {
 }
 
 // Emits the held prose as one highlighted block.
-static void release_prose(cage_mdstream *s, const char *tail, cage_blist *out) {
+static void release_prose(tiny_mdstream *s, const char *tail, tiny_blist *out) {
     char **prose = s->prose;
     size_t n = s->prose_n;
     s->prose = NULL;
@@ -140,10 +140,10 @@ static void release_prose(cage_mdstream *s, const char *tail, cage_blist *out) {
     // A block is only a block once its last line ends, so the text needs a
     // terminating newline; the closing reset belongs to the last line.
     buf_addc(&joined, '\n');
-    char *colored = cage_highlight_markdown(joined.data);
+    char *colored = tiny_highlight_markdown(joined.data);
     buf_free(&joined);
     size_t nlines;
-    char **lines = cage_split_lines(colored, &nlines);
+    char **lines = tiny_split_lines(colored, &nlines);
     // The split adds a trailing line holding the closing reset; attach it.
     if (nlines > 1) {
         char *reset = lines[nlines - 1];
@@ -162,10 +162,10 @@ static void release_prose(cage_mdstream *s, const char *tail, cage_blist *out) {
     free(colored);
 }
 
-static void release_fence(cage_mdstream *s, const char *closing, cage_blist *out) {
+static void release_fence(tiny_mdstream *s, const char *closing, tiny_blist *out) {
     // The opening fence line, colored as markdown.
     char *first = s->fence_lines[0];
-    char *first_col = cage_highlight_markdown(first);
+    char *first_col = tiny_highlight_markdown(first);
     bl_push(out, first_col, NULL, NULL);
     size_t n = s->fence_n;
     if (n > 1) {
@@ -175,10 +175,10 @@ static void release_fence(cage_mdstream *s, const char *closing, cage_blist *out
             if (i > 1) buf_addc(&body, '\n');
             buf_adds(&body, s->fence_lines[i]);
         }
-        char *colored = cage_highlight_code(s->fence_info, body.data);
+        char *colored = tiny_highlight_code(s->fence_info, body.data);
         buf_free(&body);
         size_t nlines;
-        char **lines = cage_split_lines(colored, &nlines);
+        char **lines = tiny_split_lines(colored, &nlines);
         for (size_t i = 0; i < nlines; i++) bl_push(out, lines[i], NULL, NULL);
         free(lines);
         free(colored);
@@ -190,12 +190,12 @@ static void release_fence(cage_mdstream *s, const char *closing, cage_blist *out
     free(s->fence_info);
     s->fence_info = NULL;
     if (closing) {
-        char *cc = cage_highlight_markdown(closing);
+        char *cc = tiny_highlight_markdown(closing);
         bl_push(out, cc, NULL, NULL);
     }
 }
 
-static void commit_line(cage_mdstream *s, const char *line, cage_blist *out) {
+static void commit_line(tiny_mdstream *s, const char *line, tiny_blist *out) {
     if (s->fence_marker) {
         char *close = fence_close(line);
         if (close && close[0] == s->fence_marker[0] &&
@@ -205,14 +205,14 @@ static void commit_line(cage_mdstream *s, const char *line, cage_blist *out) {
             return;
         }
         free(close);
-        cage_strv_push(&s->fence_lines, &s->fence_n, &s->fence_cap, xstrdup(line));
+        tiny_strv_push(&s->fence_lines, &s->fence_n, &s->fence_cap, xstrdup(line));
         return;
     }
     char *marker = NULL, *info = NULL;
     if (fence_open(line, &marker, &info)) {
         s->fence_marker = marker;
         s->fence_info = info;
-        cage_strv_push(&s->fence_lines, &s->fence_n, &s->fence_cap, xstrdup(line));
+        tiny_strv_push(&s->fence_lines, &s->fence_n, &s->fence_cap, xstrdup(line));
         release_prose(s, "", out);
         return;
     }
@@ -223,11 +223,11 @@ static void commit_line(cage_mdstream *s, const char *line, cage_blist *out) {
         bl_push(out, xstrdup(line), NULL, NULL);
         return;
     }
-    cage_strv_push(&s->prose, &s->prose_n, &s->prose_cap, xstrdup(line));
+    tiny_strv_push(&s->prose, &s->prose_n, &s->prose_cap, xstrdup(line));
 }
 
-cage_body_line *cage_mdstream_feed(cage_mdstream *s, const char *delta, size_t *count) {
-    cage_blist out = {0};
+tiny_body_line *tiny_mdstream_feed(tiny_mdstream *s, const char *delta, size_t *count) {
+    tiny_blist out = {0};
     size_t rest_len = strlen(s->rest);
     size_t dl = strlen(delta);
     char *joined = xmalloc(rest_len + dl + 1);
@@ -236,7 +236,7 @@ cage_body_line *cage_mdstream_feed(cage_mdstream *s, const char *delta, size_t *
     free(s->rest);
 
     size_t nlines;
-    char **lines = cage_split_lines(joined, &nlines);
+    char **lines = tiny_split_lines(joined, &nlines);
     // The last split part is the still-incomplete tail.
     s->rest = lines[nlines - 1];
     for (size_t i = 0; i + 1 < nlines; i++) {
@@ -248,8 +248,8 @@ cage_body_line *cage_mdstream_feed(cage_mdstream *s, const char *delta, size_t *
     return bl_take(&out, count);
 }
 
-cage_body_line *cage_mdstream_pending(cage_mdstream *s, size_t *count) {
-    cage_blist out = {0};
+tiny_body_line *tiny_mdstream_pending(tiny_mdstream *s, size_t *count) {
+    tiny_blist out = {0};
     char **held = s->fence_marker ? s->fence_lines : s->prose;
     size_t n = s->fence_marker ? s->fence_n : s->prose_n;
     for (size_t i = 0; i < n; i++) bl_push(&out, xstrdup(held[i]), NULL, NULL);
@@ -257,43 +257,43 @@ cage_body_line *cage_mdstream_pending(cage_mdstream *s, size_t *count) {
     return bl_take(&out, count);
 }
 
-cage_body_line *cage_mdstream_flush(cage_mdstream *s, size_t *count) {
-    cage_blist out = {0};
+tiny_body_line *tiny_mdstream_flush(tiny_mdstream *s, size_t *count) {
+    tiny_blist out = {0};
     if (!s->fence_marker) {
         release_prose(s, s->rest, &out);
     } else {
         release_fence(s, NULL, &out);
         if (s->rest[0]) {
-            char *c = cage_highlight_markdown(s->rest);
+            char *c = tiny_highlight_markdown(s->rest);
             // Split the possibly multi-line remainder.
             size_t nlines;
-            char **lines = cage_split_lines(c, &nlines);
+            char **lines = tiny_split_lines(c, &nlines);
             for (size_t i = 0; i < nlines; i++) bl_push(&out, lines[i], NULL, NULL);
             free(lines);
             free(c);
         }
     }
-    cage_mdstream_reset(s);
+    tiny_mdstream_reset(s);
     return bl_take(&out, count);
 }
 
 // ---- tail stream -----------------------------------------------------------
 
-void cage_tailstream_init(cage_tailstream *s) {
+void tiny_tailstream_init(tiny_tailstream *s) {
     s->rest = xstrdup("");
 }
 
-void cage_tailstream_free(cage_tailstream *s) {
+void tiny_tailstream_free(tiny_tailstream *s) {
     free(s->rest);
     s->rest = NULL;
 }
 
-void cage_tailstream_reset(cage_tailstream *s) {
+void tiny_tailstream_reset(tiny_tailstream *s) {
     free(s->rest);
     s->rest = xstrdup("");
 }
 
-cage_body_line *cage_tailstream_feed(cage_tailstream *s, const char *delta, size_t *count) {
+tiny_body_line *tiny_tailstream_feed(tiny_tailstream *s, const char *delta, size_t *count) {
     size_t rl = strlen(s->rest), dl = strlen(delta);
     char *text = xmalloc(rl + dl + 1);
     memcpy(text, s->rest, rl);
@@ -311,13 +311,13 @@ cage_body_line *cage_tailstream_feed(cage_tailstream *s, const char *delta, size
     return NULL;
 }
 
-cage_body_line *cage_tailstream_pending(cage_tailstream *s, size_t *count) {
+tiny_body_line *tiny_tailstream_pending(tiny_tailstream *s, size_t *count) {
     if (s->rest[0] == '\0') {
         *count = 0;
         return NULL;
     }
-    cage_body_line *v = xmalloc(sizeof *v);
-    v[0] = (cage_body_line){xstrdup(s->rest), fg_dim, NULL};
+    tiny_body_line *v = xmalloc(sizeof *v);
+    v[0] = (tiny_body_line){xstrdup(s->rest), fg_dim, NULL};
     *count = 1;
     return v;
 }

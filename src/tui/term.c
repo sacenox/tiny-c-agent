@@ -7,7 +7,7 @@
 
 // ---- UTF-8 -----------------------------------------------------------------
 
-int cage_utf8_decode(const char *s, size_t len, uint32_t *cp) {
+int tiny_utf8_decode(const char *s, size_t len, uint32_t *cp) {
     if (len == 0) {
         *cp = 0;
         return 0;
@@ -48,7 +48,7 @@ int cage_utf8_decode(const char *s, size_t len, uint32_t *cp) {
     return n;
 }
 
-int cage_utf8_encode(uint32_t cp, char out[4]) {
+int tiny_utf8_encode(uint32_t cp, char out[4]) {
     if (cp < 0x80) {
         out[0] = (char)cp;
         return 1;
@@ -77,7 +77,7 @@ static bool is_combining(uint32_t cp) {
            (cp >= 0xfe20 && cp <= 0xfe2f);
 }
 
-int cage_char_width(uint32_t cp) {
+int tiny_char_width(uint32_t cp) {
     if (cp < 32 || (cp >= 0x7f && cp < 0xa0)) return 0;
     if (cp == 0x200b || cp == 0x200c || cp == 0x200d || cp == 0xfeff) return 0;
     if (cp >= 0xfe00 && cp <= 0xfe0f) return 0;
@@ -95,14 +95,14 @@ int cage_char_width(uint32_t cp) {
     return 1;
 }
 
-int cage_display_width(const char *text) {
+int tiny_display_width(const char *text) {
     int width = 0;
     size_t len = strlen(text);
     for (size_t i = 0; i < len;) {
         uint32_t cp;
-        int n = cage_utf8_decode(text + i, len - i, &cp);
+        int n = tiny_utf8_decode(text + i, len - i, &cp);
         if (n <= 0) break;
-        width += cage_char_width(cp);
+        width += tiny_char_width(cp);
         i += (size_t)n;
     }
     return width;
@@ -122,7 +122,7 @@ static bool is_sgr(const char *s, size_t len, size_t *seq_len) {
     return false;
 }
 
-char *cage_sanitize(const char *text) {
+char *tiny_sanitize(const char *text) {
     tui_buf out;
     buf_init(&out);
     size_t len = strlen(text);
@@ -151,7 +151,7 @@ char *cage_sanitize(const char *text) {
             continue;
         }
         uint32_t cp;
-        int n = cage_utf8_decode(text + i, len - i, &cp);
+        int n = tiny_utf8_decode(text + i, len - i, &cp);
         if (n <= 0) break;
         buf_add(&out, text + i, (size_t)n);
         i += (size_t)n;
@@ -160,7 +160,7 @@ char *cage_sanitize(const char *text) {
     return buf_steal(&out);
 }
 
-char *cage_expand_tabs(const char *text, int size) {
+char *tiny_expand_tabs(const char *text, int size) {
     if (!strchr(text, '\t')) return strdup(text);
     tui_buf out;
     buf_init(&out);
@@ -174,7 +174,7 @@ char *cage_expand_tabs(const char *text, int size) {
             continue;
         }
         uint32_t cp;
-        int n = cage_utf8_decode(text + i, len - i, &cp);
+        int n = tiny_utf8_decode(text + i, len - i, &cp);
         if (n <= 0) break;
         if (cp == '\t') {
             int spaces = size - (column % size);
@@ -182,7 +182,7 @@ char *cage_expand_tabs(const char *text, int size) {
             column += spaces;
         } else {
             buf_add(&out, text + i, (size_t)n);
-            column += cage_char_width(cp);
+            column += tiny_char_width(cp);
         }
         i += (size_t)n;
     }
@@ -190,7 +190,7 @@ char *cage_expand_tabs(const char *text, int size) {
     return buf_steal(&out);
 }
 
-char **cage_wrap_line(const char *text, int width, size_t *count) {
+char **tiny_wrap_line(const char *text, int width, size_t *count) {
     size_t cap = 8, n = 0;
     char **rows = malloc(cap * sizeof *rows);
     tui_buf cur;
@@ -214,9 +214,9 @@ char **cage_wrap_line(const char *text, int width, size_t *count) {
             }
         }
         uint32_t cp;
-        int nb = cage_utf8_decode(text + i, len - i, &cp);
+        int nb = tiny_utf8_decode(text + i, len - i, &cp);
         if (nb <= 0) break;
-        int w = cage_char_width(cp);
+        int w = tiny_char_width(cp);
         if (used + w > width && cur.len > 0) {
             if (n == cap) {
                 cap *= 2;
@@ -265,47 +265,47 @@ enum {
 
 // Returns the key type for a code/modifier pair, or -1 when unmapped.
 static int key_for(long code, int mods) {
-    if (code == K_ENTER) return (mods == ALT || mods == SHIFT) ? CAGE_KEY_NEWLINE : (mods == 0 ? CAGE_KEY_SUBMIT : -1);
-    if (code == K_ESCAPE) return mods == 0 ? CAGE_KEY_ESCAPE : -1;
-    if (code == K_TAB) return mods == 0 ? CAGE_KEY_TAB : -1;
-    if (code == K_BACKSPACE) return mods == CTRL ? CAGE_KEY_WORD_BACK : (mods == 0 ? CAGE_KEY_BACKSPACE : -1);
-    if (code == K_DELETE) return mods == 0 ? CAGE_KEY_DELETE : -1;
-    if (code == K_LEFT) return mods == CTRL ? CAGE_KEY_WORD_LEFT : (mods == 0 ? CAGE_KEY_LEFT : -1);
-    if (code == K_RIGHT) return mods == CTRL ? CAGE_KEY_WORD_RIGHT : (mods == 0 ? CAGE_KEY_RIGHT : -1);
-    if (code == K_UP) return mods == 0 ? CAGE_KEY_UP : -1;
-    if (code == K_DOWN) return mods == 0 ? CAGE_KEY_DOWN : -1;
-    if (code == K_HOME) return mods == CTRL ? CAGE_KEY_DOC_START : (mods == 0 ? CAGE_KEY_HOME : -1);
-    if (code == K_END) return mods == CTRL ? CAGE_KEY_DOC_END : (mods == 0 ? CAGE_KEY_END : -1);
-    if (code == 97 && mods == CTRL) return CAGE_KEY_HOME;       // Ctrl+A
-    if (code == 98 && mods == ALT) return CAGE_KEY_WORD_BACK;   // Alt+B
-    if (code == 99 && mods == CTRL) return CAGE_KEY_INTERRUPT;  // Ctrl+C
-    if (code == 100 && mods == CTRL) return CAGE_KEY_EOF;       // Ctrl+D
-    if (code == 101 && mods == CTRL) return CAGE_KEY_END;       // Ctrl+E
-    if (code == 106 && mods == CTRL) return CAGE_KEY_NEWLINE;   // Ctrl+J
-    if (code == 119 && mods == CTRL) return CAGE_KEY_WORD_BACK; // Ctrl+W
+    if (code == K_ENTER) return (mods == ALT || mods == SHIFT) ? TINY_KEY_NEWLINE : (mods == 0 ? TINY_KEY_SUBMIT : -1);
+    if (code == K_ESCAPE) return mods == 0 ? TINY_KEY_ESCAPE : -1;
+    if (code == K_TAB) return mods == 0 ? TINY_KEY_TAB : -1;
+    if (code == K_BACKSPACE) return mods == CTRL ? TINY_KEY_WORD_BACK : (mods == 0 ? TINY_KEY_BACKSPACE : -1);
+    if (code == K_DELETE) return mods == 0 ? TINY_KEY_DELETE : -1;
+    if (code == K_LEFT) return mods == CTRL ? TINY_KEY_WORD_LEFT : (mods == 0 ? TINY_KEY_LEFT : -1);
+    if (code == K_RIGHT) return mods == CTRL ? TINY_KEY_WORD_RIGHT : (mods == 0 ? TINY_KEY_RIGHT : -1);
+    if (code == K_UP) return mods == 0 ? TINY_KEY_UP : -1;
+    if (code == K_DOWN) return mods == 0 ? TINY_KEY_DOWN : -1;
+    if (code == K_HOME) return mods == CTRL ? TINY_KEY_DOC_START : (mods == 0 ? TINY_KEY_HOME : -1);
+    if (code == K_END) return mods == CTRL ? TINY_KEY_DOC_END : (mods == 0 ? TINY_KEY_END : -1);
+    if (code == 97 && mods == CTRL) return TINY_KEY_HOME;       // Ctrl+A
+    if (code == 98 && mods == ALT) return TINY_KEY_WORD_BACK;   // Alt+B
+    if (code == 99 && mods == CTRL) return TINY_KEY_INTERRUPT;  // Ctrl+C
+    if (code == 100 && mods == CTRL) return TINY_KEY_EOF;       // Ctrl+D
+    if (code == 101 && mods == CTRL) return TINY_KEY_END;       // Ctrl+E
+    if (code == 106 && mods == CTRL) return TINY_KEY_NEWLINE;   // Ctrl+J
+    if (code == 119 && mods == CTRL) return TINY_KEY_WORD_BACK; // Ctrl+W
     return -1;
 }
 
-struct cage_key_parser {
+struct tiny_key_parser {
     char *buf;
     size_t len;
     size_t cap;
     bool pasting;
 };
 
-cage_key_parser *cage_key_parser_new(void) {
-    cage_key_parser *p = calloc(1, sizeof *p);
+tiny_key_parser *tiny_key_parser_new(void) {
+    tiny_key_parser *p = calloc(1, sizeof *p);
     if (!p) abort();
     return p;
 }
 
-void cage_key_parser_free(cage_key_parser *p) {
+void tiny_key_parser_free(tiny_key_parser *p) {
     if (!p) return;
     free(p->buf);
     free(p);
 }
 
-static void pb_append(cage_key_parser *p, const char *bytes, size_t n) {
+static void pb_append(tiny_key_parser *p, const char *bytes, size_t n) {
     if (p->len + n + 1 > p->cap) {
         size_t cap = p->cap ? p->cap : 64;
         while (cap < p->len + n + 1) cap *= 2;
@@ -318,7 +318,7 @@ static void pb_append(cage_key_parser *p, const char *bytes, size_t n) {
     p->buf[p->len] = '\0';
 }
 
-static void pb_drop(cage_key_parser *p, size_t n) {
+static void pb_drop(tiny_key_parser *p, size_t n) {
     if (n >= p->len) {
         p->len = 0;
         if (p->buf) p->buf[0] = '\0';
@@ -329,13 +329,13 @@ static void pb_drop(cage_key_parser *p, size_t n) {
     p->buf[p->len] = '\0';
 }
 
-static void emit_type(cage_key_fn emit, void *user, cage_key_type t) {
-    cage_key k = {.type = t, .text = NULL};
+static void emit_type(tiny_key_fn emit, void *user, tiny_key_type t) {
+    tiny_key k = {.type = t, .text = NULL};
     emit(&k, user);
 }
 
-static void emit_text(cage_key_fn emit, void *user, const char *text) {
-    cage_key k = {.type = CAGE_KEY_TEXT, .text = (char *)text};
+static void emit_text(tiny_key_fn emit, void *user, const char *text) {
+    tiny_key k = {.type = TINY_KEY_TEXT, .text = (char *)text};
     emit(&k, user);
 }
 
@@ -361,7 +361,7 @@ static int mods_of(const char *field, size_t n) {
     return raw > 0 ? (int)((raw - 1) & MODS) : 0;
 }
 
-static void parse_escape(cage_key_parser *p, cage_key_fn emit, void *user, bool *progress);
+static void parse_escape(tiny_key_parser *p, tiny_key_fn emit, void *user, bool *progress);
 
 // `params final`: the legacy `CSI 1;5D` form and SS3's bare `A`.
 static int legacy_chord(char final, const char *params, size_t plen, long *code, int *mods) {
@@ -426,7 +426,7 @@ static int csi_u_chord(const char *params, size_t plen, long *code, int *mods) {
 }
 
 // OSC ends at BEL or ST; DCS/APC/PM/SOS end at ST. Skipped whole.
-static bool skip_string(cage_key_parser *p, bool bel) {
+static bool skip_string(tiny_key_parser *p, bool bel) {
     size_t st = SIZE_MAX, bell = SIZE_MAX;
     for (size_t i = 2; i + 1 < p->len; i++)
         if (p->buf[i] == '\x1b' && p->buf[i + 1] == '\\') {
@@ -448,7 +448,7 @@ static bool skip_string(cage_key_parser *p, bool bel) {
     return true;
 }
 
-static bool parse_csi(cage_key_parser *p, cage_key_fn emit, void *user) {
+static bool parse_csi(tiny_key_parser *p, tiny_key_fn emit, void *user) {
     size_t i = 2;
     while (i < p->len) {
         unsigned char c = (unsigned char)p->buf[i];
@@ -469,12 +469,12 @@ static bool parse_csi(cage_key_parser *p, cage_key_fn emit, void *user) {
                           : legacy_chord(final, params, plen, &code, &mods);
     if (rc == 0) {
         int type = key_for(code, mods);
-        if (type >= 0) emit_type(emit, user, (cage_key_type)type);
+        if (type >= 0) emit_type(emit, user, (tiny_key_type)type);
     }
     return true;
 }
 
-static void parse_escape(cage_key_parser *p, cage_key_fn emit, void *user, bool *progress) {
+static void parse_escape(tiny_key_parser *p, tiny_key_fn emit, void *user, bool *progress) {
     *progress = false;
     if (p->len < 2) return;
     char next = p->buf[1];
@@ -492,36 +492,36 @@ static void parse_escape(cage_key_parser *p, cage_key_fn emit, void *user, bool 
     }
     pb_drop(p, 2);
     uint32_t cp;
-    cage_utf8_decode(&next, 1, &cp);
+    tiny_utf8_decode(&next, 1, &cp);
     int type = key_for(cp, ALT);
-    if (type >= 0) emit_type(emit, user, (cage_key_type)type);
+    if (type >= 0) emit_type(emit, user, (tiny_key_type)type);
     *progress = true;
 }
 
-static void map_point(uint32_t cp, cage_key_fn emit, void *user) {
+static void map_point(uint32_t cp, tiny_key_fn emit, void *user) {
     if (cp == 0x7f) {
         int t = key_for(K_BACKSPACE, 0);
-        if (t >= 0) emit_type(emit, user, (cage_key_type)t);
+        if (t >= 0) emit_type(emit, user, (tiny_key_type)t);
         return;
     }
     if (cp < 0x20) {
         if (cp == 0x08) {
             int t = key_for(K_BACKSPACE, 0);
-            if (t >= 0) emit_type(emit, user, (cage_key_type)t);
+            if (t >= 0) emit_type(emit, user, (tiny_key_type)t);
         } else if (cp == 0x09) {
             int t = key_for(K_TAB, 0);
-            if (t >= 0) emit_type(emit, user, (cage_key_type)t);
+            if (t >= 0) emit_type(emit, user, (tiny_key_type)t);
         } else if (cp == 0x0d) {
             int t = key_for(K_ENTER, 0);
-            if (t >= 0) emit_type(emit, user, (cage_key_type)t);
+            if (t >= 0) emit_type(emit, user, (tiny_key_type)t);
         } else {
             int t = key_for((long)cp + 0x60, CTRL);
-            if (t >= 0) emit_type(emit, user, (cage_key_type)t);
+            if (t >= 0) emit_type(emit, user, (tiny_key_type)t);
         }
         return;
     }
     char out[4];
-    int n = cage_utf8_encode(cp, out);
+    int n = tiny_utf8_encode(cp, out);
     char *text = malloc((size_t)n + 1);
     if (!text) abort();
     memcpy(text, out, (size_t)n);
@@ -530,8 +530,8 @@ static void map_point(uint32_t cp, cage_key_fn emit, void *user) {
     free(text);
 }
 
-void cage_key_parser_feed(cage_key_parser *p, const char *bytes, size_t n,
-                          cage_key_fn emit, void *user) {
+void tiny_key_parser_feed(tiny_key_parser *p, const char *bytes, size_t n,
+                          tiny_key_fn emit, void *user) {
     pb_append(p, bytes, n);
     for (;;) {
         if (p->pasting) {
@@ -578,25 +578,25 @@ void cage_key_parser_feed(cage_key_parser *p, const char *bytes, size_t n,
             continue;
         }
         uint32_t cp;
-        int nb = cage_utf8_decode(p->buf, p->len, &cp);
+        int nb = tiny_utf8_decode(p->buf, p->len, &cp);
         if (nb <= 0) break;
         pb_drop(p, (size_t)nb);
         map_point(cp, emit, user);
     }
 }
 
-int cage_key_parser_pending(cage_key_parser *p) {
+int tiny_key_parser_pending(tiny_key_parser *p) {
     if (p->pasting) return 0;
     if (p->len == 1 && p->buf[0] == '\x1b') return 1;
     return p->len > 1 ? 2 : 0;
 }
 
-void cage_key_parser_flush_escape(cage_key_parser *p, cage_key_fn emit, void *user) {
+void tiny_key_parser_flush_escape(tiny_key_parser *p, tiny_key_fn emit, void *user) {
     if (!(p->len == 1 && p->buf[0] == '\x1b')) return;
     pb_drop(p, 1);
-    emit_type(emit, user, CAGE_KEY_ESCAPE);
+    emit_type(emit, user, TINY_KEY_ESCAPE);
 }
 
-void cage_key_parser_flush_sequence(cage_key_parser *p) {
+void tiny_key_parser_flush_sequence(tiny_key_parser *p) {
     pb_drop(p, p->len);
 }

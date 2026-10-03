@@ -1,4 +1,4 @@
-// cage - config-first agent for the terminal.
+// tiny-c-agent - config-first agent for the terminal.
 
 #include <limits.h>
 #include <signal.h>
@@ -59,22 +59,22 @@ int main(int argc, char **argv) {
             fprintf(stderr, "-p requires a prompt\n");
             return 2;
         }
-        stdin_prompt = cage_read_stream(stdin);
+        stdin_prompt = tiny_read_stream(stdin);
         prompt = stdin_prompt;
     }
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
     char *err = NULL;
-    cage_config *cfg = cage_config_load(config_path, &err);
+    tiny_config *cfg = tiny_config_load(config_path, &err);
     if (!cfg) {
         fprintf(stderr, "%s\n", err ? err : "config error");
         return 1;
     }
 
-    cage_model model;
+    tiny_model model;
     memset(&model, 0, sizeof model);
-    if (cage_resolve_model(cfg, &model, &err) != 0) {
+    if (tiny_resolve_model(cfg, &model, &err) != 0) {
         if (print_mode) {
             fprintf(stderr, "%s\n", err ? err : "model error");
             return 1;
@@ -88,33 +88,33 @@ int main(int argc, char **argv) {
     char cwd[PATH_MAX];
     if (!getcwd(cwd, sizeof cwd)) strcpy(cwd, ".");
 
-    cage_resources *resources = cage_resources_build(cfg, cwd, &err);
+    tiny_resources *resources = tiny_resources_build(cfg, cwd, &err);
     if (!resources) {
         fprintf(stderr, "%s\n", err ? err : "prompt error");
         return 1;
     }
 
     size_t tools_len;
-    const cage_tool *tools = cage_tools(model.supports_images, &tools_len);
+    const tiny_tool *tools = tiny_tools(model.supports_images, &tools_len);
 
     if (!print_mode) {
         // The TUI owns the terminal and its own signal handlers.
-        cage_tui_config tc = {
+        tiny_tui_config tc = {
             .cfg = cfg,
             .model = model,
             .resources = resources,
             .cwd = cwd,
         };
-        int code = cage_tui_run(&tc);
-        cage_resources_free(resources);
-        cage_config_free(cfg);
+        int code = tiny_tui_run(&tc);
+        tiny_resources_free(resources);
+        tiny_config_free(cfg);
         free(err);
         free(stdin_prompt);
         curl_global_cleanup();
         return code;
     }
 
-    cage_session *session = cage_session_open(cfg->sessions_dir, cwd, prompt, &err);
+    tiny_session *session = tiny_session_open(cfg->sessions_dir, cwd, prompt, &err);
     if (!session) {
         fprintf(stderr, "%s\n", err ? err : "session error");
         return 1;
@@ -123,29 +123,29 @@ int main(int argc, char **argv) {
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 
-    cage_headless head;
-    cage_headless_init(&head, stdout, stderr);
+    tiny_headless head;
+    tiny_headless_init(&head, stdout, stderr);
 
-    cage_agent a = {0};
+    tiny_agent a = {0};
     a.model = model;
     a.system_prompt = resources->system_prompt;
     a.tools = tools;
     a.tools_len = tools_len;
 
     a.session = session;
-    a.on_event = cage_headless_event;
+    a.on_event = tiny_headless_event;
     a.user = &head;
     a.cancel = &g_cancel;
 
-    cage_agent_turn(&a, prompt);
+    tiny_agent_turn(&a, prompt);
 
-    int code = cage_headless_finish(&head);
+    int code = tiny_headless_finish(&head);
 
-    cage_agent_free(&a);
-    cage_headless_free(&head);
-    cage_session_close(session);
-    cage_resources_free(resources);
-    cage_config_free(cfg);
+    tiny_agent_free(&a);
+    tiny_headless_free(&head);
+    tiny_session_close(session);
+    tiny_resources_free(resources);
+    tiny_config_free(cfg);
     free(err);
     free(stdin_prompt);
     curl_global_cleanup();

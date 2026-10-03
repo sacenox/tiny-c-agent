@@ -22,12 +22,12 @@ typedef struct {
 
 // Reads a highlights query for `lang` from the usual locations, or NULL.
 static char *read_query(const char *lang) {
-    const char *env = getenv("CAGE_QUERIES_DIR");
+    const char *env = getenv("TINY_QUERIES_DIR");
     const char *home = getenv("HOME");
     char path[4096];
     if (env && env[0]) {
         snprintf(path, sizeof path, "%s/%s/highlights.scm", env, lang);
-        char *q = cage_read_file(path);
+        char *q = tiny_read_file(path);
         if (q) return q;
     }
     const char *tmpl[] = {
@@ -42,7 +42,7 @@ static char *read_query(const char *lang) {
         } else {
             snprintf(path, sizeof path, tmpl[i], lang);
         }
-        char *q = cage_read_file(path);
+        char *q = tiny_read_file(path);
         if (q) return q;
     }
     return NULL;
@@ -135,7 +135,7 @@ static syntax *grammar_md_inline(void) {
 typedef struct {
     size_t start;
     size_t end;
-    const cage_style *style;
+    const tiny_style *style;
 } span;
 
 typedef struct {
@@ -144,7 +144,7 @@ typedef struct {
     size_t cap;
 } spanlist;
 
-static void span_push(spanlist *l, size_t start, size_t end, const cage_style *style) {
+static void span_push(spanlist *l, size_t start, size_t end, const tiny_style *style) {
     if (l->n == l->cap) {
         l->cap = l->cap ? l->cap * 2 : 16;
         l->v = realloc(l->v, l->cap * sizeof *l->v);
@@ -166,7 +166,7 @@ static void spans_of(syntax *s, TSNode node, size_t offset, spanlist *out) {
             if (len >= sizeof namebuf) len = sizeof namebuf - 1;
             memcpy(namebuf, name, len);
             namebuf[len] = '\0';
-            const cage_style *style = cage_capture_style(namebuf);
+            const tiny_style *style = tiny_capture_style(namebuf);
             if (!style) continue;
             span_push(out, offset + ts_node_start_byte(cap.node), offset + ts_node_end_byte(cap.node), style);
         }
@@ -202,7 +202,7 @@ static TSNode parse(syntax *s, const char *text, size_t len, TSTree **tree_out) 
     return ts_tree_root_node(tree);
 }
 
-static void sgr_of(tui_buf *b, const cage_style *style) {
+static void sgr_of(tui_buf *b, const tiny_style *style) {
     if (style) sgr_style(b, style);
     else sgr_plain(b);
 }
@@ -212,7 +212,7 @@ static void sgr_of(tui_buf *b, const cage_style *style) {
 static void paint_emit(tui_buf *out, const char *text, size_t text_len, size_t *at, size_t end,
                        const span *const *active, size_t nactive, bool *plain) {
     if (end <= *at) return;
-    const cage_style *style = nactive ? active[nactive - 1]->style : NULL;
+    const tiny_style *style = nactive ? active[nactive - 1]->style : NULL;
     if (!style) {
         if (!*plain) sgr_plain(out);
         *plain = true;
@@ -285,7 +285,7 @@ static char *paint(const char *text, span *spans, size_t nspans, size_t text_len
 }
 
 // Replaces every span entirely inside [start, end) with one covering span.
-static void recolor(spanlist *l, size_t start, size_t end, const cage_style *style) {
+static void recolor(spanlist *l, size_t start, size_t end, const tiny_style *style) {
     size_t w = 0;
     for (size_t i = 0; i < l->n; i++) {
         if (l->v[i].start >= start && l->v[i].end <= end) continue;
@@ -307,7 +307,7 @@ static int heading_level(TSNode heading) {
     return 1;
 }
 
-char *cage_highlight_markdown(const char *text) {
+char *tiny_highlight_markdown(const char *text) {
     syntax *md = grammar_md();
     if (!md) return strdup(text);
     size_t len = strlen(text);
@@ -346,7 +346,7 @@ char *cage_highlight_markdown(const char *text) {
             collect_types(iroot, code_types, 1, &codes, &ncodes, &ccap);
             for (size_t c = 0; c < ncodes; c++)
                 recolor(&spans, off + ts_node_start_byte(codes[c]),
-                        off + ts_node_end_byte(codes[c]), cage_inline_code_style());
+                        off + ts_node_end_byte(codes[c]), tiny_inline_code_style());
             free(codes);
             free(sub);
         }
@@ -359,7 +359,7 @@ char *cage_highlight_markdown(const char *text) {
     collect_types(root, heading_types, 2, &headings, &nhead, &hcap);
     for (size_t i = 0; i < nhead; i++)
         recolor(&spans, ts_node_start_byte(headings[i]), ts_node_end_byte(headings[i]),
-                cage_heading_style(heading_level(headings[i])));
+                tiny_heading_style(heading_level(headings[i])));
     free(headings);
 
     char *out = paint(text, spans.v, spans.n, len);
@@ -370,7 +370,7 @@ char *cage_highlight_markdown(const char *text) {
     return out;
 }
 
-char *cage_highlight_code(const char *info, const char *text) {
+char *tiny_highlight_code(const char *info, const char *text) {
     syntax *s = NULL;
     char lang[32];
     size_t i = 0;

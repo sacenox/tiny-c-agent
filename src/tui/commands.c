@@ -35,13 +35,13 @@ static const char *const EFFORTS[] = {
     "off", "minimal", "low", "medium", "high", "xhigh", "max",
 };
 
-static void run_help(cage_command_ctx *ctx, const char *args);
-static void run_new(cage_command_ctx *ctx, const char *args);
-static void run_provider(cage_command_ctx *ctx, const char *args);
-static void run_model(cage_command_ctx *ctx, const char *args);
-static void run_thinking(cage_command_ctx *ctx, const char *args);
+static void run_help(tiny_command_ctx *ctx, const char *args);
+static void run_new(tiny_command_ctx *ctx, const char *args);
+static void run_provider(tiny_command_ctx *ctx, const char *args);
+static void run_model(tiny_command_ctx *ctx, const char *args);
+static void run_thinking(tiny_command_ctx *ctx, const char *args);
 
-static const cage_command COMMANDS[] = {
+static const tiny_command COMMANDS[] = {
     {"help", "list commands and keybindings", run_help},
     {"new", "start a new session", run_new},
     {"provider", "choose the provider and model", run_provider},
@@ -49,7 +49,7 @@ static const cage_command COMMANDS[] = {
     {"thinking", "set the effort level", run_thinking},
 };
 
-static void emit_str(cage_command_ctx *ctx, const char *s) {
+static void emit_str(tiny_command_ctx *ctx, const char *s) {
     ctx->write(ctx->user, strdup(s));
 }
 
@@ -69,7 +69,7 @@ static char *keyed(const char *key, const char *description, size_t width) {
     return buf_steal(&b);
 }
 
-static void run_help(cage_command_ctx *ctx, const char *args) {
+static void run_help(tiny_command_ctx *ctx, const char *args) {
     (void)args;
     size_t width = 0;
     for (size_t i = 0; i < sizeof COMMANDS / sizeof COMMANDS[0]; i++) {
@@ -92,13 +92,13 @@ static void run_help(cage_command_ctx *ctx, const char *args) {
         ctx->write(ctx->user, keyed(KEYBINDINGS[i][0], KEYBINDINGS[i][1], width));
 }
 
-static void run_new(cage_command_ctx *ctx, const char *args) {
+static void run_new(tiny_command_ctx *ctx, const char *args) {
     (void)args;
     ctx->new_session(ctx->user);
     emit_str(ctx, "new session");
 }
 
-static const cage_provider *find_custom(const cage_config *cfg, const char *id) {
+static const tiny_provider *find_custom(const tiny_config *cfg, const char *id) {
     for (size_t i = 0; i < cfg->custom_providers_len; i++)
         if (strcmp(cfg->custom_providers[i].id, id) == 0) return &cfg->custom_providers[i];
     return NULL;
@@ -111,12 +111,12 @@ static bool is_builtin(const char *id) {
 }
 
 // The first model advertised for a provider, or NULL when it has none.
-static const char *first_model(const cage_config *cfg, const char *provider) {
-    const cage_provider *custom = find_custom(cfg, provider);
+static const char *first_model(const tiny_config *cfg, const char *provider) {
+    const tiny_provider *custom = find_custom(cfg, provider);
     if (custom) return custom->models_len > 0 ? custom->models[0] : NULL;
-    const char *canonical = cage_provider_canonical(provider);
-    for (size_t i = 0; i < cage_catalog_count(); i++) {
-        const cage_model_info *e = cage_catalog_get(i);
+    const char *canonical = tiny_provider_canonical(provider);
+    for (size_t i = 0; i < tiny_catalog_count(); i++) {
+        const tiny_model_info *e = tiny_catalog_get(i);
         if (strcmp(e->provider, canonical) == 0) return e->id;
     }
     return NULL;
@@ -133,37 +133,37 @@ static void push_option(char ***ids, char ***labels, size_t *n,
     (*n)++;
 }
 
-size_t cage_choose_list(const cage_config *cfg, cage_choose what,
+size_t tiny_choose_list(const tiny_config *cfg, tiny_choose what,
                         const char *provider, char ***out_ids, char ***out_labels) {
     char **ids = NULL, **labels = NULL;
     size_t n = 0;
 
-    if (what == CAGE_CHOOSE_PROVIDER) {
+    if (what == TINY_CHOOSE_PROVIDER) {
         for (size_t i = 0; i < sizeof BUILTINS / sizeof BUILTINS[0]; i++)
             push_option(&ids, &labels, &n, BUILTINS[i].id, BUILTINS[i].name);
         for (size_t i = 0; i < cfg->custom_providers_len; i++) {
-            const cage_provider *p = &cfg->custom_providers[i];
+            const tiny_provider *p = &cfg->custom_providers[i];
             push_option(&ids, &labels, &n, p->id, p->name);
         }
-    } else if (what == CAGE_CHOOSE_MODEL) {
+    } else if (what == TINY_CHOOSE_MODEL) {
         const char *prov = provider ? provider : cfg->provider;
         if (prov) {
-            const cage_provider *custom = find_custom(cfg, prov);
+            const tiny_provider *custom = find_custom(cfg, prov);
             if (custom) {
                 for (size_t i = 0; i < custom->models_len; i++)
                     push_option(&ids, &labels, &n, custom->models[i], custom->models[i]);
             } else {
-                const char *canonical = cage_provider_canonical(prov);
-                for (size_t i = 0; i < cage_catalog_count(); i++) {
-                    const cage_model_info *e = cage_catalog_get(i);
+                const char *canonical = tiny_provider_canonical(prov);
+                for (size_t i = 0; i < tiny_catalog_count(); i++) {
+                    const tiny_model_info *e = tiny_catalog_get(i);
                     if (strcmp(e->provider, canonical) == 0)
                         push_option(&ids, &labels, &n, e->id, e->name);
                 }
             }
         }
     } else {
-        const cage_model_info *info = cfg->provider && cfg->model
-            ? cage_catalog_lookup(cage_provider_canonical(cfg->provider), cfg->model)
+        const tiny_model_info *info = cfg->provider && cfg->model
+            ? tiny_catalog_lookup(tiny_provider_canonical(cfg->provider), cfg->model)
             : NULL;
         if (info) {
             for (size_t i = 0; i < info->effort_len; i++) {
@@ -178,18 +178,18 @@ size_t cage_choose_list(const cage_config *cfg, cage_choose what,
     return n;
 }
 
-static const char *provider_name(const cage_config *cfg, const char *id) {
+static const char *provider_name(const tiny_config *cfg, const char *id) {
     for (size_t i = 0; i < sizeof BUILTINS / sizeof BUILTINS[0]; i++)
         if (strcmp(BUILTINS[i].id, id) == 0) return BUILTINS[i].name;
-    const cage_provider *p = find_custom(cfg, id);
+    const tiny_provider *p = find_custom(cfg, id);
     if (p) return p->name ? p->name : p->id;
     return id;
 }
 
-char *cage_choose_title(const cage_config *cfg, cage_choose what,
+char *tiny_choose_title(const tiny_config *cfg, tiny_choose what,
                         const char *provider) {
-    if (what == CAGE_CHOOSE_PROVIDER) return strdup("Select a provider");
-    if (what == CAGE_CHOOSE_EFFORT) return strdup("Select a thinking level");
+    if (what == TINY_CHOOSE_PROVIDER) return strdup("Select a provider");
+    if (what == TINY_CHOOSE_EFFORT) return strdup("Select a thinking level");
     const char *prov = provider ? provider : cfg->provider;
     if (!prov) return strdup("Select a model");
     const char *name = provider_name(cfg, prov);
@@ -199,11 +199,11 @@ char *cage_choose_title(const cage_config *cfg, cage_choose what,
     return s;
 }
 
-static void run_provider(cage_command_ctx *ctx, const char *args) {
-    char *id = cage_trim(args);
+static void run_provider(tiny_command_ctx *ctx, const char *args) {
+    char *id = tiny_trim(args);
     if (id[0] == '\0') {
         free(id);
-        ctx->choose(ctx->user, CAGE_CHOOSE_PROVIDER);
+        ctx->choose(ctx->user, TINY_CHOOSE_PROVIDER);
         return;
     }
     if (!is_builtin(id) && !find_custom(ctx->cfg, id)) {
@@ -231,11 +231,11 @@ static void run_provider(cage_command_ctx *ctx, const char *args) {
     free(id);
 }
 
-static void run_model(cage_command_ctx *ctx, const char *args) {
-    char *id = cage_trim(args);
+static void run_model(tiny_command_ctx *ctx, const char *args) {
+    char *id = tiny_trim(args);
     if (id[0] == '\0') {
         free(id);
-        ctx->choose(ctx->user, CAGE_CHOOSE_MODEL);
+        ctx->choose(ctx->user, TINY_CHOOSE_MODEL);
         return;
     }
     char *err = NULL;
@@ -248,11 +248,11 @@ static void run_model(cage_command_ctx *ctx, const char *args) {
     free(id);
 }
 
-static void run_thinking(cage_command_ctx *ctx, const char *args) {
-    char *level = cage_trim(args);
+static void run_thinking(tiny_command_ctx *ctx, const char *args) {
+    char *level = tiny_trim(args);
     if (level[0] == '\0') {
         free(level);
-        ctx->choose(ctx->user, CAGE_CHOOSE_EFFORT);
+        ctx->choose(ctx->user, TINY_CHOOSE_EFFORT);
         return;
     }
     bool valid = false;
@@ -275,7 +275,7 @@ static void run_thinking(cage_command_ctx *ctx, const char *args) {
     free(level);
 }
 
-const cage_command *cage_find_command(const char *text, const char **args) {
+const tiny_command *tiny_find_command(const char *text, const char **args) {
     if (text[0] != '/') return NULL;
     const char *p = text + 1;
     size_t n = 0;
@@ -291,13 +291,13 @@ const cage_command *cage_find_command(const char *text, const char **args) {
     return NULL;
 }
 
-char *cage_complete_command(const char *draft) {
+char *tiny_complete_command(const char *draft) {
     if (draft[0] != '/') return NULL;
     for (const char *p = draft; *p; p++)
         if (*p == ' ' || *p == '\t' || *p == '\n') return NULL;
     const char *typed = draft + 1;
     size_t tn = strlen(typed);
-    const cage_command *match = NULL;
+    const tiny_command *match = NULL;
     size_t nmatch = 0;
     char *shared = NULL;
     for (size_t i = 0; i < sizeof COMMANDS / sizeof COMMANDS[0]; i++) {
@@ -306,7 +306,7 @@ char *cage_complete_command(const char *draft) {
         if (!match) match = &COMMANDS[i];
         if (!shared) shared = strdup(COMMANDS[i].name);
         else {
-            char *next = cage_common_prefix(shared, COMMANDS[i].name);
+            char *next = tiny_common_prefix(shared, COMMANDS[i].name);
             free(shared);
             shared = next;
         }

@@ -17,7 +17,7 @@ static void trim_zeros(char *s) {
     *p = '\0';
 }
 
-char *cage_format_tokens(long n) {
+char *tiny_format_tokens(long n) {
     char tmp[48];
     if (n < 1000) {
         snprintf(tmp, sizeof tmp, "%ld", n);
@@ -31,9 +31,9 @@ char *cage_format_tokens(long n) {
     return strdup(tmp);
 }
 
-char *cage_context_usage_line(long used, long window, long max_tokens) {
+char *tiny_context_usage_line(long used, long window, long max_tokens) {
     if (window <= 0) {
-        char *t = cage_format_tokens(used);
+        char *t = tiny_format_tokens(used);
         tui_buf b;
         buf_init(&b);
         char label[64];
@@ -43,8 +43,8 @@ char *cage_context_usage_line(long used, long window, long max_tokens) {
         if (!b.data) return strdup("");
         return buf_steal(&b);
     }
-    char *u = cage_format_tokens(used);
-    char *w = cage_format_tokens(window);
+    char *u = tiny_format_tokens(used);
+    char *w = tiny_format_tokens(window);
     tui_buf b;
     buf_init(&b);
     if (max_tokens > 0 && used + max_tokens > window) {

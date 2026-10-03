@@ -29,7 +29,7 @@
 
 // ---- small helpers --------------------------------------------------------
 
-static void set_error(cage_tool_result *res, const char *fmt, ...) {
+static void set_error(tiny_tool_result *res, const char *fmt, ...) {
     char detail[1024];
     va_list ap;
     va_start(ap, fmt);
@@ -77,7 +77,7 @@ static bool utf8_seq(const unsigned char *p, size_t n, size_t *len) {
 // Replaces invalid byte sequences with U+FFFD, so the text survives the JSON
 // and session round trips. Mirrors a UTF-8 decode with replacement.
 static char *utf8_clean(const char *in, size_t n) {
-    cage_buf b = {0};
+    tiny_buf b = {0};
     const unsigned char *p = (const unsigned char *)in;
     size_t i = 0;
     while (i < n) {
@@ -100,7 +100,7 @@ static char *utf8_clean(const char *in, size_t n) {
 // ---- file helpers ---------------------------------------------------------
 
 // Reads up to MAX_READ bytes. Returns 0, or -1 with errno set.
-static int slurp(const char *path, cage_buf *out) {
+static int slurp(const char *path, tiny_buf *out) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) return -1;
     struct stat st;
@@ -206,7 +206,7 @@ static const char *image_mime(const char *path) {
 
 // ---- read -----------------------------------------------------------------
 
-static void tool_read(const char *args, bool supports_images, cage_tool_result *res) {
+static void tool_read(const char *args, bool supports_images, tiny_tool_result *res) {
     yyjson_doc *doc = yyjson_read(args, strlen(args), 0);
     const char *path = arg_str(doc, "path");
     if (!path) {
@@ -215,7 +215,7 @@ static void tool_read(const char *args, bool supports_images, cage_tool_result *
         return;
     }
 
-    cage_buf data = {0};
+    tiny_buf data = {0};
     if (slurp(path, &data) != 0) {
         set_error(res, "read failed: %s: %s", path, strerror(errno));
         free(data.data);
@@ -243,7 +243,7 @@ static void tool_read(const char *args, bool supports_images, cage_tool_result *
         res->text = xmalloc(strlen(path) + strlen(mime) + 64);
         sprintf(res->text, "read %s (%s, %zu bytes)", path, mime, data.len);
         res->images = xmalloc(sizeof *res->images);
-        res->images[0] = (cage_image){.media_type = xstrdup(mime), .data = b64};
+        res->images[0] = (tiny_image){.media_type = xstrdup(mime), .data = b64};
         res->images_len = 1;
         free(data.data);
         yyjson_doc_free(doc);
@@ -261,7 +261,7 @@ static void tool_read(const char *args, bool supports_images, cage_tool_result *
     size_t take = data.len > MAX_TEXT ? MAX_TEXT : data.len;
     char *clean = utf8_clean(data.data ? data.data : "", take);
     if (data.len > MAX_TEXT) {
-        cage_buf out = {0};
+        tiny_buf out = {0};
         buf_adds(&out, clean);
         char marker[256];
         snprintf(marker, sizeof marker, "\n\n... truncated ... %s is %zu characters\n", path, data.len);
@@ -276,7 +276,7 @@ static void tool_read(const char *args, bool supports_images, cage_tool_result *
 
 // ---- edit -----------------------------------------------------------------
 
-static void tool_edit(const char *args, cage_tool_result *res) {
+static void tool_edit(const char *args, tiny_tool_result *res) {
     yyjson_doc *doc = yyjson_read(args, strlen(args), 0);
     yyjson_val *root = doc ? yyjson_doc_get_root(doc) : NULL;
     yyjson_val *pa = root ? yyjson_obj_get(root, "path") : NULL;
@@ -310,7 +310,7 @@ static void tool_edit(const char *args, cage_tool_result *res) {
         return;
     }
 
-    cage_buf data = {0};
+    tiny_buf data = {0};
     if (slurp(path, &data) != 0) {
         set_error(res, "edit failed: %s: %s", path, strerror(errno));
         free(data.data);
@@ -333,7 +333,7 @@ static void tool_edit(const char *args, cage_tool_result *res) {
         return;
     }
 
-    cage_buf out = {0};
+    tiny_buf out = {0};
     buf_add(&out, data.data, at);
     buf_add(&out, nw, new_len);
     buf_add(&out, data.data + at + old_len, data.len - at - old_len);
@@ -355,7 +355,7 @@ static void tool_edit(const char *args, cage_tool_result *res) {
 // ---- bash -----------------------------------------------------------------
 
 // Keeps only the last MAX_TAIL bytes, flagging that a gap was dropped.
-static void keep_tail(cage_buf *t, bool *truncated) {
+static void keep_tail(tiny_buf *t, bool *truncated) {
     if (t->len <= MAX_TAIL) return;
     memmove(t->data, t->data + t->len - MAX_TAIL, MAX_TAIL);
     t->len = MAX_TAIL;
@@ -363,8 +363,8 @@ static void keep_tail(cage_buf *t, bool *truncated) {
     *truncated = true;
 }
 
-static void tool_bash(const char *args, cage_tool_output_fn out, void *user,
-                      const volatile bool *cancel, cage_tool_result *res) {
+static void tool_bash(const char *args, tiny_tool_output_fn out, void *user,
+                      const volatile bool *cancel, tiny_tool_result *res) {
     yyjson_doc *doc = yyjson_read(args, strlen(args), 0);
     const char *command = arg_str(doc, "command");
     if (!command) {
@@ -403,7 +403,7 @@ static void tool_bash(const char *args, cage_tool_output_fn out, void *user,
     close(pipefd[1]);
     setpgid(pid, pid);
 
-    cage_buf head = {0}, tail = {0};
+    tiny_buf head = {0}, tail = {0};
     bool truncated = false;
     bool cancelled = false;
 
@@ -468,13 +468,13 @@ static void tool_bash(const char *args, cage_tool_output_fn out, void *user,
     else if (WIFSIGNALED(status)) code = 128 + WTERMSIG(status);
     else code = 0;
 
-    cage_buf body = {0};
+    tiny_buf body = {0};
     buf_add(&body, head.data ? head.data : "", head.len);
     if (truncated) buf_adds(&body, TRUNCATED);
     buf_add(&body, tail.data ? tail.data : "", tail.len);
 
     char *clean = utf8_clean(body.data ? body.data : "", body.len);
-    cage_buf text = {0};
+    tiny_buf text = {0};
     buf_adds(&text, clean);
     if (text.len > 0 && text.data[text.len - 1] != '\n') buf_adds(&text, "\n");
     char code_line[32];
@@ -514,13 +514,13 @@ static void tool_bash(const char *args, cage_tool_output_fn out, void *user,
     "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\",\"description\":\"Command to run\"}}," \
     "\"required\":[\"command\"],\"additionalProperties\":false}"
 
-const cage_tool *cage_tools(bool supports_images, size_t *len) {
-    static const cage_tool plain[] = {
+const tiny_tool *tiny_tools(bool supports_images, size_t *len) {
+    static const tiny_tool plain[] = {
         {"read", READ_DESCRIPTION, READ_PARAMS},
         {"edit", EDIT_DESCRIPTION, EDIT_PARAMS},
         {"bash", BASH_DESCRIPTION, BASH_PARAMS},
     };
-    static const cage_tool images[] = {
+    static const tiny_tool images[] = {
         {"read", READ_IMAGE_DESCRIPTION, READ_PARAMS},
         {"edit", EDIT_DESCRIPTION, EDIT_PARAMS},
         {"bash", BASH_DESCRIPTION, BASH_PARAMS},
@@ -529,9 +529,9 @@ const cage_tool *cage_tools(bool supports_images, size_t *len) {
     return supports_images ? images : plain;
 }
 
-cage_tool_result cage_tool_run(const char *name, const char *args, bool supports_images,
-                               cage_tool_output_fn out, void *user, const volatile bool *cancel) {
-    cage_tool_result res = {0};
+tiny_tool_result tiny_tool_run(const char *name, const char *args, bool supports_images,
+                               tiny_tool_output_fn out, void *user, const volatile bool *cancel) {
+    tiny_tool_result res = {0};
     if (name && strcmp(name, "read") == 0) {
         tool_read(args, supports_images, &res);
     } else if (name && strcmp(name, "edit") == 0) {

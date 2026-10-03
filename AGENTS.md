@@ -1,6 +1,6 @@
 # Project file for agents
 
-## c-agent (`cage` for short)
+## tiny-c-agent (`tiny` for short)
 
 A fast, minimal and config first agent for your terminal.
 

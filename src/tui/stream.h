@@ -1,11 +1,11 @@
-// cage TUI stream renderers: assistant text and reasoning, projected onto lines.
+// tiny TUI stream renderers: assistant text and reasoning, projected onto lines.
 //
 // MarkdownStream holds a fenced code block until its close, and a run of prose
 // until its block ends, then colors the whole block. TailStream keeps only the
 // incomplete tail, dimmed.
 
-#ifndef CAGE_TUI_STREAM_H
-#define CAGE_TUI_STREAM_H
+#ifndef TINY_TUI_STREAM_H
+#define TINY_TUI_STREAM_H
 
 #include <stddef.h>
 
@@ -13,23 +13,23 @@
 
 typedef struct {
     char *text;            // malloc'd, may carry SGR
-    cage_fg_fn style;      // NULL when unstyled
+    tiny_fg_fn style;      // NULL when unstyled
     const char *bg;        // row background, or NULL for Normal
-} cage_body_line;
+} tiny_body_line;
 
-void cage_body_lines_free(cage_body_line *lines, size_t count);
+void tiny_body_lines_free(tiny_body_line *lines, size_t count);
 
 // A growable list of body lines, used while assembling a block.
 typedef struct {
-    cage_body_line *v;
+    tiny_body_line *v;
     size_t n;
     size_t cap;
-} cage_blist;
+} tiny_blist;
 
-void bl_push(cage_blist *l, char *text, cage_fg_fn style, const char *bg);
+void bl_push(tiny_blist *l, char *text, tiny_fg_fn style, const char *bg);
 
 // Hands the list's array to the caller (NULL when empty) and resets the count.
-cage_body_line *bl_take(cage_blist *l, size_t *count);
+tiny_body_line *bl_take(tiny_blist *l, size_t *count);
 
 typedef struct {
     char *rest;
@@ -41,25 +41,25 @@ typedef struct {
     char **prose;
     size_t prose_n;
     size_t prose_cap;
-} cage_mdstream;
+} tiny_mdstream;
 
-void cage_mdstream_init(cage_mdstream *s);
-void cage_mdstream_free(cage_mdstream *s);
+void tiny_mdstream_init(tiny_mdstream *s);
+void tiny_mdstream_free(tiny_mdstream *s);
 // feed/pending/flush return a heap array the caller frees with
-// cage_body_lines_free; *count receives its length.
-cage_body_line *cage_mdstream_feed(cage_mdstream *s, const char *delta, size_t *count);
-cage_body_line *cage_mdstream_pending(cage_mdstream *s, size_t *count);
-cage_body_line *cage_mdstream_flush(cage_mdstream *s, size_t *count);
-void cage_mdstream_reset(cage_mdstream *s);
+// tiny_body_lines_free; *count receives its length.
+tiny_body_line *tiny_mdstream_feed(tiny_mdstream *s, const char *delta, size_t *count);
+tiny_body_line *tiny_mdstream_pending(tiny_mdstream *s, size_t *count);
+tiny_body_line *tiny_mdstream_flush(tiny_mdstream *s, size_t *count);
+void tiny_mdstream_reset(tiny_mdstream *s);
 
 typedef struct {
     char *rest;
-} cage_tailstream;
+} tiny_tailstream;
 
-void cage_tailstream_init(cage_tailstream *s);
-void cage_tailstream_free(cage_tailstream *s);
-cage_body_line *cage_tailstream_feed(cage_tailstream *s, const char *delta, size_t *count);
-cage_body_line *cage_tailstream_pending(cage_tailstream *s, size_t *count);
-void cage_tailstream_reset(cage_tailstream *s);
+void tiny_tailstream_init(tiny_tailstream *s);
+void tiny_tailstream_free(tiny_tailstream *s);
+tiny_body_line *tiny_tailstream_feed(tiny_tailstream *s, const char *delta, size_t *count);
+tiny_body_line *tiny_tailstream_pending(tiny_tailstream *s, size_t *count);
+void tiny_tailstream_reset(tiny_tailstream *s);
 
 #endif

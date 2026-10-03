@@ -15,7 +15,7 @@ PROVIDERS = ["opencode", "opencode-go"]
 
 def fetch(src):
     if src.startswith(("http://", "https://")):
-        req = urllib.request.Request(src, headers={"User-Agent": "cage-catalog/1"})
+        req = urllib.request.Request(src, headers={"User-Agent": "tiny-catalog/1"})
         with urllib.request.urlopen(req) as r:
             return json.load(r)
     with open(src) as f:
@@ -76,7 +76,7 @@ def main():
             ident, ", ".join(cstr(v) for v in key)))
     if arrays:
         lines.append("")
-    lines.append("const cage_model_info cage_catalog_entries[] = {")
+    lines.append("const tiny_model_info tiny_catalog_entries[] = {")
     for provider, mid, name, images, ctx, ident, elen in rows:
         lines.append("    {%s, %s, %s, %s, %dL, %s, %d}," % (
             cstr(provider), cstr(mid), cstr(name),
@@ -84,8 +84,8 @@ def main():
     lines += [
         "};",
         "",
-        "const size_t cage_catalog_entries_len =",
-        "    sizeof cage_catalog_entries / sizeof cage_catalog_entries[0];",
+        "const size_t tiny_catalog_entries_len =",
+        "    sizeof tiny_catalog_entries / sizeof tiny_catalog_entries[0];",
         "",
     ]
 

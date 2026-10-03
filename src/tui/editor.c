@@ -8,7 +8,7 @@
 
 #define TAB 4
 
-struct cage_editor {
+struct tiny_editor {
     char **lines;
     size_t nlines;
     size_t row;
@@ -23,7 +23,7 @@ static size_t cp_count(const char *s) {
     size_t n = 0, len = strlen(s);
     for (size_t i = 0; i < len;) {
         uint32_t cp;
-        int b = cage_utf8_decode(s + i, len - i, &cp);
+        int b = tiny_utf8_decode(s + i, len - i, &cp);
         if (b <= 0) break;
         i += (size_t)b;
         n++;
@@ -36,7 +36,7 @@ static size_t cp_off(const char *s, size_t idx) {
     size_t i = 0, n = 0, len = strlen(s);
     while (n < idx && i < len) {
         uint32_t cp;
-        int b = cage_utf8_decode(s + i, len - i, &cp);
+        int b = tiny_utf8_decode(s + i, len - i, &cp);
         if (b <= 0) break;
         i += (size_t)b;
         n++;
@@ -65,7 +65,7 @@ static uint32_t *cps_of(const char *s, size_t *n_out) {
     uint32_t *cps = xmalloc(cap * sizeof *cps);
     for (size_t i = 0; i < len;) {
         uint32_t cp;
-        int b = cage_utf8_decode(s + i, len - i, &cp);
+        int b = tiny_utf8_decode(s + i, len - i, &cp);
         if (b <= 0) break;
         if (n == cap) {
             cap *= 2;
@@ -100,8 +100,8 @@ static size_t word_end(const char *s, size_t col) {
     return i;
 }
 
-cage_editor *cage_editor_new(void) {
-    cage_editor *e = calloc(1, sizeof *e);
+tiny_editor *tiny_editor_new(void) {
+    tiny_editor *e = calloc(1, sizeof *e);
     if (!e) abort();
     e->nlines = 1;
     e->lines = xmalloc(sizeof *e->lines);
@@ -111,7 +111,7 @@ cage_editor *cage_editor_new(void) {
     return e;
 }
 
-void cage_editor_free(cage_editor *e) {
+void tiny_editor_free(tiny_editor *e) {
     if (!e) return;
     for (size_t i = 0; i < e->nlines; i++) free(e->lines[i]);
     free(e->lines);
@@ -119,7 +119,7 @@ void cage_editor_free(cage_editor *e) {
     free(e);
 }
 
-const char *cage_editor_text(cage_editor *e) {
+const char *tiny_editor_text(tiny_editor *e) {
     if (!e->text_dirty) return e->text;
     tui_buf b;
     buf_init(&b);
@@ -134,7 +134,7 @@ const char *cage_editor_text(cage_editor *e) {
     return e->text;
 }
 
-void cage_editor_clear(cage_editor *e) {
+void tiny_editor_clear(tiny_editor *e) {
     for (size_t i = 0; i < e->nlines; i++) free(e->lines[i]);
     e->nlines = 1;
     e->lines = realloc(e->lines, sizeof *e->lines);
@@ -145,7 +145,7 @@ void cage_editor_clear(cage_editor *e) {
     e->text_dirty = true;
 }
 
-void cage_editor_set_text(cage_editor *e, const char *text) {
+void tiny_editor_set_text(tiny_editor *e, const char *text) {
     for (size_t i = 0; i < e->nlines; i++) free(e->lines[i]);
     // Split on newline.
     size_t cap = 8, n = 0;
@@ -184,10 +184,10 @@ static int *cells_of(const char *line, size_t *n_out) {
     int col = 0;
     for (size_t i = 0; i < len;) {
         uint32_t cp;
-        int b = cage_utf8_decode(line + i, len - i, &cp);
+        int b = tiny_utf8_decode(line + i, len - i, &cp);
         if (b <= 0) break;
         if (cp == '\t') col += TAB - (col % TAB);
-        else col += cage_char_width(cp);
+        else col += tiny_char_width(cp);
         if (n == cap) {
             cap *= 2;
             out = realloc(out, cap * sizeof *out);
@@ -210,11 +210,11 @@ static size_t col_at_cell(const char *line, int cell) {
     return i;
 }
 
-static void caret(cage_editor *e, int *row_out, int *col_out) {
+static void caret(tiny_editor *e, int *row_out, int *col_out) {
     char *line = xstrdup(e->lines[e->row]);
-    char *expanded = cage_expand_tabs(line, TAB);
+    char *expanded = tiny_expand_tabs(line, TAB);
     size_t nrows;
-    char **chunks = cage_wrap_line(expanded, e->width, &nrows);
+    char **chunks = tiny_wrap_line(expanded, e->width, &nrows);
     size_t ncells;
     int *cells = cells_of(line, &ncells);
     int cell = cells[e->col < ncells ? e->col : ncells - 1];
@@ -222,7 +222,7 @@ static void caret(cage_editor *e, int *row_out, int *col_out) {
     int row = cell / e->width;
     if (row >= (int)nrows) {
         *row_out = (int)nrows - 1;
-        *col_out = cage_display_width(chunks[nrows - 1]);
+        *col_out = tiny_display_width(chunks[nrows - 1]);
     } else {
         *row_out = row;
         *col_out = cell - row * e->width;
@@ -235,7 +235,7 @@ static void caret(cage_editor *e, int *row_out, int *col_out) {
 
 // Replaces the code points [start, end) of a line with `insert`. A copy of
 // `line` is passed because the caller may hold it.
-static void line_splice(cage_editor *e, const char *line, size_t start, size_t end, const char *insert) {
+static void line_splice(tiny_editor *e, const char *line, size_t start, size_t end, const char *insert) {
     char *before = cp_slice(line, 0, start);
     char *after = cp_slice(line, end, cp_count(line));
     tui_buf b;
@@ -251,7 +251,7 @@ static void line_splice(cage_editor *e, const char *line, size_t start, size_t e
     e->text_dirty = true;
 }
 
-static void insert_text(cage_editor *e, const char *text) {
+static void insert_text(tiny_editor *e, const char *text) {
     // Split `text` on newlines.
     size_t nparts = 1;
     for (const char *p = text; *p; p++)
@@ -269,7 +269,7 @@ static void insert_text(cage_editor *e, const char *text) {
 
     // Build the replacement lines.
     size_t n;
-    char **parts = cage_split_lines(text, &n);
+    char **parts = tiny_split_lines(text, &n);
 
     tui_buf head;
     buf_init(&head);
@@ -305,7 +305,7 @@ static void insert_text(cage_editor *e, const char *text) {
     e->text_dirty = true;
 }
 
-static void backspace(cage_editor *e) {
+static void backspace(tiny_editor *e) {
     if (e->col > 0) {
         line_splice(e, e->lines[e->row], e->col - 1, e->col, "");
         e->col--;
@@ -329,7 +329,7 @@ static void backspace(cage_editor *e) {
     }
 }
 
-static void delete_forward(cage_editor *e) {
+static void delete_forward(tiny_editor *e) {
     size_t n = cp_count(e->lines[e->row]);
     if (e->col < n) {
         line_splice(e, e->lines[e->row], e->col, e->col + 1, "");
@@ -350,66 +350,66 @@ static void delete_forward(cage_editor *e) {
     }
 }
 
-cage_edit_result cage_editor_handle(cage_editor *e, const cage_key *key) {
+tiny_edit_result tiny_editor_handle(tiny_editor *e, const tiny_key *key) {
     switch (key->type) {
-    case CAGE_KEY_SUBMIT:
-        return CAGE_EDIT_SUBMIT;
-    case CAGE_KEY_NEWLINE:
+    case TINY_KEY_SUBMIT:
+        return TINY_EDIT_SUBMIT;
+    case TINY_KEY_NEWLINE:
         insert_text(e, "\n");
-        return CAGE_EDIT_CHANGED;
-    case CAGE_KEY_TEXT:
+        return TINY_EDIT_CHANGED;
+    case TINY_KEY_TEXT:
         insert_text(e, key->text ? key->text : "");
-        return CAGE_EDIT_CHANGED;
-    case CAGE_KEY_BACKSPACE:
+        return TINY_EDIT_CHANGED;
+    case TINY_KEY_BACKSPACE:
         backspace(e);
-        return CAGE_EDIT_CHANGED;
-    case CAGE_KEY_DELETE:
+        return TINY_EDIT_CHANGED;
+    case TINY_KEY_DELETE:
         delete_forward(e);
-        return CAGE_EDIT_CHANGED;
-    case CAGE_KEY_WORD_BACK: {
+        return TINY_EDIT_CHANGED;
+    case TINY_KEY_WORD_BACK: {
         size_t start = word_start(e->lines[e->row], e->col);
         line_splice(e, e->lines[e->row], start, e->col, "");
         e->col = start;
-        return CAGE_EDIT_CHANGED;
+        return TINY_EDIT_CHANGED;
     }
-    case CAGE_KEY_LEFT:
+    case TINY_KEY_LEFT:
         if (e->col > 0) e->col--;
         else if (e->row > 0) {
             e->row--;
             e->col = cp_count(e->lines[e->row]);
         }
-        return CAGE_EDIT_CHANGED;
-    case CAGE_KEY_RIGHT:
+        return TINY_EDIT_CHANGED;
+    case TINY_KEY_RIGHT:
         if (e->col < cp_count(e->lines[e->row])) e->col++;
         else if (e->row + 1 < e->nlines) {
             e->row++;
             e->col = 0;
         }
-        return CAGE_EDIT_CHANGED;
-    case CAGE_KEY_WORD_LEFT: {
+        return TINY_EDIT_CHANGED;
+    case TINY_KEY_WORD_LEFT: {
         size_t start = word_start(e->lines[e->row], e->col);
         if (start != e->col) {
             e->col = start;
-            return CAGE_EDIT_CHANGED;
+            return TINY_EDIT_CHANGED;
         }
-        if (e->row == 0) return CAGE_EDIT_CHANGED;
+        if (e->row == 0) return TINY_EDIT_CHANGED;
         e->row--;
         size_t prev = cp_count(e->lines[e->row]);
         e->col = word_start(e->lines[e->row], prev);
-        return CAGE_EDIT_CHANGED;
+        return TINY_EDIT_CHANGED;
     }
-    case CAGE_KEY_WORD_RIGHT: {
+    case TINY_KEY_WORD_RIGHT: {
         size_t end = word_end(e->lines[e->row], e->col);
         if (end != e->col) {
             e->col = end;
-            return CAGE_EDIT_CHANGED;
+            return TINY_EDIT_CHANGED;
         }
-        if (e->row + 1 >= e->nlines) return CAGE_EDIT_CHANGED;
+        if (e->row + 1 >= e->nlines) return TINY_EDIT_CHANGED;
         e->row++;
         e->col = word_end(e->lines[e->row], 0);
-        return CAGE_EDIT_CHANGED;
+        return TINY_EDIT_CHANGED;
     }
-    case CAGE_KEY_UP: {
+    case TINY_KEY_UP: {
         int crow, ccol;
         caret(e, &crow, &ccol);
         if (crow > 0) {
@@ -418,26 +418,26 @@ cage_edit_result cage_editor_handle(cage_editor *e, const cage_key *key) {
             int cell = cells[e->col < n ? e->col : n - 1] - e->width;
             free(cells);
             e->col = col_at_cell(e->lines[e->row], cell);
-            return CAGE_EDIT_CHANGED;
+            return TINY_EDIT_CHANGED;
         }
-        if (e->row == 0) return CAGE_EDIT_CHANGED;
+        if (e->row == 0) return TINY_EDIT_CHANGED;
         e->row--;
-        char *expanded = cage_expand_tabs(e->lines[e->row], TAB);
+        char *expanded = tiny_expand_tabs(e->lines[e->row], TAB);
         size_t nrows;
-        char **chunks = cage_wrap_line(expanded, e->width, &nrows);
+        char **chunks = tiny_wrap_line(expanded, e->width, &nrows);
         int last_row = (int)nrows - 1;
         for (size_t i = 0; i < nrows; i++) free(chunks[i]);
         free(chunks);
         free(expanded);
         e->col = col_at_cell(e->lines[e->row], last_row * e->width + ccol);
-        return CAGE_EDIT_CHANGED;
+        return TINY_EDIT_CHANGED;
     }
-    case CAGE_KEY_DOWN: {
+    case TINY_KEY_DOWN: {
         int crow, ccol;
         caret(e, &crow, &ccol);
-        char *expanded = cage_expand_tabs(e->lines[e->row], TAB);
+        char *expanded = tiny_expand_tabs(e->lines[e->row], TAB);
         size_t nrows;
-        char **chunks = cage_wrap_line(expanded, e->width, &nrows);
+        char **chunks = tiny_wrap_line(expanded, e->width, &nrows);
         for (size_t i = 0; i < nrows; i++) free(chunks[i]);
         free(chunks);
         free(expanded);
@@ -447,40 +447,40 @@ cage_edit_result cage_editor_handle(cage_editor *e, const cage_key *key) {
             int cell = cells[e->col < n ? e->col : n - 1] + e->width;
             free(cells);
             e->col = col_at_cell(e->lines[e->row], cell);
-            return CAGE_EDIT_CHANGED;
+            return TINY_EDIT_CHANGED;
         }
-        if (e->row + 1 >= e->nlines) return CAGE_EDIT_CHANGED;
+        if (e->row + 1 >= e->nlines) return TINY_EDIT_CHANGED;
         e->row++;
         e->col = col_at_cell(e->lines[e->row], ccol);
-        return CAGE_EDIT_CHANGED;
+        return TINY_EDIT_CHANGED;
     }
-    case CAGE_KEY_HOME:
+    case TINY_KEY_HOME:
         e->col = 0;
-        return CAGE_EDIT_CHANGED;
-    case CAGE_KEY_END:
+        return TINY_EDIT_CHANGED;
+    case TINY_KEY_END:
         e->col = cp_count(e->lines[e->row]);
-        return CAGE_EDIT_CHANGED;
-    case CAGE_KEY_DOC_START:
+        return TINY_EDIT_CHANGED;
+    case TINY_KEY_DOC_START:
         e->row = 0;
         e->col = 0;
-        return CAGE_EDIT_CHANGED;
-    case CAGE_KEY_DOC_END:
+        return TINY_EDIT_CHANGED;
+    case TINY_KEY_DOC_END:
         e->row = e->nlines - 1;
         e->col = cp_count(e->lines[e->row]);
-        return CAGE_EDIT_CHANGED;
+        return TINY_EDIT_CHANGED;
     default:
-        return CAGE_EDIT_NONE;
+        return TINY_EDIT_NONE;
     }
 }
 
-bool cage_editor_complete_word(cage_editor *e, char *(*step)(const char *word, void *user), void *user) {
+bool tiny_editor_complete_word(tiny_editor *e, char *(*step)(const char *word, void *user), void *user) {
     char *line = e->lines[e->row];
     size_t start = word_start(line, e->col);
     if (start == e->col) return false;
     // The character before the caret must not be whitespace.
     size_t off = cp_off(line, e->col - 1);
     uint32_t cp;
-    cage_utf8_decode(line + off, strlen(line) - off, &cp);
+    tiny_utf8_decode(line + off, strlen(line) - off, &cp);
     if (cp_is_space(cp)) return false;
     char *word = cp_slice(line, start, e->col);
     char *completed = step(word, user);
@@ -492,16 +492,16 @@ bool cage_editor_complete_word(cage_editor *e, char *(*step)(const char *word, v
     return true;
 }
 
-cage_editor_view cage_editor_render(cage_editor *e, int width, int max_rows) {
+tiny_editor_view tiny_editor_render(tiny_editor *e, int width, int max_rows) {
     e->width = width > 0 ? width : 1;
     size_t cap = 16, n = 0;
     char **rows = xmalloc(cap * sizeof *rows);
     int cursor_row = 0, cursor_col = 0;
     for (size_t line = 0; line < e->nlines; line++) {
         char *disp = xstrdup(e->lines[line]);
-        char *expanded = cage_expand_tabs(disp, TAB);
+        char *expanded = tiny_expand_tabs(disp, TAB);
         size_t nchunks;
-        char **chunks = cage_wrap_line(expanded, e->width, &nchunks);
+        char **chunks = tiny_wrap_line(expanded, e->width, &nchunks);
         free(expanded);
         free(disp);
         if (line == e->row) {
@@ -539,7 +539,7 @@ cage_editor_view cage_editor_render(cage_editor *e, int width, int max_rows) {
     }
     free(rows);
 
-    cage_editor_view v = {
+    tiny_editor_view v = {
         .rows = out,
         .nrows = shown,
         .cursor_row = cursor_row - e->scroll,

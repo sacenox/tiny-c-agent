@@ -210,7 +210,7 @@ struct snapshot_entry {
     file_state *state;
 };
 
-struct cage_snapshot {
+struct tiny_snapshot {
     struct snapshot_entry *entries;
     size_t len;
 };
@@ -220,13 +220,13 @@ static int cmp_entry(const void *a, const void *b) {
     return strcmp(x->path, y->path);
 }
 
-struct cage_snapshot *cage_snapshot_capture(const struct timespec *force_since) {
+struct tiny_snapshot *tiny_snapshot_capture(const struct timespec *force_since) {
     found_list files = {0};
     char cwd[4096];
     if (!getcwd(cwd, sizeof cwd)) strcpy(cwd, ".");
     walk_dir(cwd, "", &files);
 
-    struct cage_snapshot *snap = xcalloc(1, sizeof *snap);
+    struct tiny_snapshot *snap = xcalloc(1, sizeof *snap);
     snap->entries = xmalloc((files.len ? files.len : 1) * sizeof *snap->entries);
     cache_entry *new_cache = xmalloc((files.len ? files.len : 1) * sizeof *new_cache);
     size_t new_len = 0;
@@ -265,7 +265,7 @@ struct cage_snapshot *cage_snapshot_capture(const struct timespec *force_since) 
     return snap;
 }
 
-void cage_snapshot_free(struct cage_snapshot *s) {
+void tiny_snapshot_free(struct tiny_snapshot *s) {
     if (!s) return;
     for (size_t i = 0; i < s->len; i++) {
         release(s->entries[i].state);
@@ -451,7 +451,7 @@ static char *unified(const char *path, const char *a, size_t alen,
         npref[i + 1] = npref[i] + (ops[i].kind == OP_EQ || ops[i].kind == OP_INS);
     }
 
-    cage_buf out = {0};
+    tiny_buf out = {0};
     buf_adds(&out, "Index: ");
     buf_adds(&out, path);
     buf_adds(&out, "\n===================================================================\n--- ");
@@ -521,7 +521,7 @@ static char *note_text(int kind, const char *verb) {
 
 // Fills `*out` and returns true when the file changed; false means no change.
 static bool diff_one(const char *path, const file_state *before,
-                     const file_state *after, cage_file_diff *out) {
+                     const file_state *after, tiny_file_diff *out) {
     out->path = xstrdup(path);
     out->patch = NULL;
     out->note = NULL;
@@ -568,9 +568,9 @@ static bool diff_one(const char *path, const file_state *before,
     return true;
 }
 
-cage_file_diff *cage_snapshot_diff(const struct cage_snapshot *before,
-                                   const struct cage_snapshot *after, size_t *len) {
-    cage_file_diff *out = NULL;
+tiny_file_diff *tiny_snapshot_diff(const struct tiny_snapshot *before,
+                                   const struct tiny_snapshot *after, size_t *len) {
+    tiny_file_diff *out = NULL;
     size_t cap = 0, n = 0;
     size_t i = 0, j = 0;
     while (i < before->len || j < after->len) {
@@ -580,7 +580,7 @@ cage_file_diff *cage_snapshot_diff(const struct cage_snapshot *before,
         else if (j >= after->len) cmp = -1;
         else cmp = strcmp(before->entries[i].path, after->entries[j].path);
 
-        cage_file_diff d;
+        tiny_file_diff d;
         bool changed;
         if (cmp < 0) {
             path = before->entries[i].path;
@@ -611,7 +611,7 @@ cage_file_diff *cage_snapshot_diff(const struct cage_snapshot *before,
     return out;
 }
 
-void cage_file_diffs_free(cage_file_diff *diffs, size_t len) {
+void tiny_file_diffs_free(tiny_file_diff *diffs, size_t len) {
     if (!diffs) return;
     for (size_t i = 0; i < len; i++) {
         free(diffs[i].path);

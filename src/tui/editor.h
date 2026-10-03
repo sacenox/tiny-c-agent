@@ -1,44 +1,44 @@
-// cage TUI line editor: multi-line, wrapped, with word motion and completion.
+// tiny TUI line editor: multi-line, wrapped, with word motion and completion.
 
-#ifndef CAGE_TUI_EDITOR_H
-#define CAGE_TUI_EDITOR_H
+#ifndef TINY_TUI_EDITOR_H
+#define TINY_TUI_EDITOR_H
 
 #include <stdbool.h>
 #include <stddef.h>
 
 #include "term.h"
 
-typedef struct cage_editor cage_editor;
+typedef struct tiny_editor tiny_editor;
 
-cage_editor *cage_editor_new(void);
-void cage_editor_free(cage_editor *e);
+tiny_editor *tiny_editor_new(void);
+void tiny_editor_free(tiny_editor *e);
 
 // The draft as one string, lines joined by newline. Owned by the editor.
-const char *cage_editor_text(cage_editor *e);
+const char *tiny_editor_text(tiny_editor *e);
 
-void cage_editor_clear(cage_editor *e);
-void cage_editor_set_text(cage_editor *e, const char *text);
+void tiny_editor_clear(tiny_editor *e);
+void tiny_editor_set_text(tiny_editor *e, const char *text);
 
 typedef enum {
-    CAGE_EDIT_NONE,
-    CAGE_EDIT_CHANGED,
-    CAGE_EDIT_SUBMIT,
-} cage_edit_result;
+    TINY_EDIT_NONE,
+    TINY_EDIT_CHANGED,
+    TINY_EDIT_SUBMIT,
+} tiny_edit_result;
 
-cage_edit_result cage_editor_handle(cage_editor *e, const cage_key *key);
+tiny_edit_result tiny_editor_handle(tiny_editor *e, const tiny_key *key);
 
 // Applies `step` to the word ending at the caret, replacing it; false when
 // there is no word before the caret.
-bool cage_editor_complete_word(cage_editor *e, char *(*step)(const char *word, void *user), void *user);
+bool tiny_editor_complete_word(tiny_editor *e, char *(*step)(const char *word, void *user), void *user);
 
 typedef struct {
     char **rows;
     size_t nrows;
     int cursor_row;
     int cursor_col;
-} cage_editor_view;
+} tiny_editor_view;
 
 // Clipped to `max_rows`, scrolled only as far as the caret requires.
-cage_editor_view cage_editor_render(cage_editor *e, int width, int max_rows);
+tiny_editor_view tiny_editor_render(tiny_editor *e, int width, int max_rows);
 
 #endif

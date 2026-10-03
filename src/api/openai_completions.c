@@ -16,15 +16,15 @@
 
 // ---- request building -----------------------------------------------------
 
-static void add_message(yyjson_mut_doc *doc, yyjson_mut_val *arr, const cage_message *m) {
+static void add_message(yyjson_mut_doc *doc, yyjson_mut_val *arr, const tiny_message *m) {
     yyjson_mut_val *o = yyjson_mut_obj(doc);
     yyjson_mut_arr_add_val(arr, o);
 
-    if (m->role == CAGE_ROLE_TOOL) {
+    if (m->role == TINY_ROLE_TOOL) {
         yyjson_mut_obj_add_strcpy(doc, o, "role", "tool");
         yyjson_mut_obj_add_strcpy(doc, o, "tool_call_id", m->tool_call_id ? m->tool_call_id : "");
-        char *t = cage_message_text(m);
-        if (t[0] == '\0' && cage_message_has_image(m)) {
+        char *t = tiny_message_text(m);
+        if (t[0] == '\0' && tiny_message_has_image(m)) {
             free(t);
             t = xstrdup("(see attached image)");
         }
@@ -32,24 +32,24 @@ static void add_message(yyjson_mut_doc *doc, yyjson_mut_val *arr, const cage_mes
         free(t);
         return;
     }
-    if (m->role == CAGE_ROLE_USER) {
+    if (m->role == TINY_ROLE_USER) {
         yyjson_mut_obj_add_strcpy(doc, o, "role", "user");
-        char *t = cage_message_text(m);
+        char *t = tiny_message_text(m);
         yyjson_mut_obj_add_strcpy(doc, o, "content", t);
         free(t);
         return;
     }
 
     yyjson_mut_obj_add_strcpy(doc, o, "role", "assistant");
-    char *t = cage_message_text(m);
+    char *t = tiny_message_text(m);
     yyjson_mut_obj_add_strcpy(doc, o, "content", t);
     free(t);
 
     bool has_calls = false;
     yyjson_mut_val *calls = yyjson_mut_arr(doc);
     for (size_t i = 0; i < m->blocks_len; i++) {
-        const cage_block *b = &m->blocks[i];
-        if (b->type != CAGE_BLOCK_TOOL_CALL) continue;
+        const tiny_block *b = &m->blocks[i];
+        if (b->type != TINY_BLOCK_TOOL_CALL) continue;
         has_calls = true;
         yyjson_mut_val *tc = yyjson_mut_obj(doc);
         yyjson_mut_arr_add_val(calls, tc);
@@ -63,23 +63,23 @@ static void add_message(yyjson_mut_doc *doc, yyjson_mut_val *arr, const cage_mes
     if (has_calls) yyjson_mut_obj_add_val(doc, o, "tool_calls", calls);
 }
 
-static void add_tools(yyjson_mut_doc *doc, yyjson_mut_val *root, const cage_context *ctx) {
+static void add_tools(yyjson_mut_doc *doc, yyjson_mut_val *root, const tiny_context *ctx) {
     if (ctx->tools_len == 0) return;
     yyjson_mut_val *tools = yyjson_mut_arr(doc);
     yyjson_mut_obj_add_val(doc, root, "tools", tools);
     for (size_t i = 0; i < ctx->tools_len; i++) {
-        const cage_tool *t = &ctx->tools[i];
+        const tiny_tool *t = &ctx->tools[i];
         yyjson_mut_val *tool = yyjson_mut_obj(doc);
         yyjson_mut_arr_add_val(tools, tool);
         yyjson_mut_obj_add_strcpy(doc, tool, "type", "function");
         yyjson_mut_val *fn = yyjson_mut_obj(doc);
         yyjson_mut_obj_add_val(doc, tool, "function", fn);
-        cage_json_tool(doc, fn, t, "parameters");
+        tiny_json_tool(doc, fn, t, "parameters");
     }
 }
 
-static char *build_request(const cage_model *model, const cage_context *ctx,
-                           const cage_stream_opts *opts) {
+static char *build_request(const tiny_model *model, const tiny_context *ctx,
+                           const tiny_stream_opts *opts) {
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
     yyjson_mut_val *root = yyjson_mut_obj(doc);
     yyjson_mut_doc_set_root(doc, root);
@@ -104,16 +104,16 @@ static char *build_request(const cage_model *model, const cage_context *ctx,
         yyjson_mut_obj_add_strcpy(doc, sys, "content", ctx->system_prompt);
     }
     for (size_t i = 0; i < ctx->messages_len; ) {
-        if (ctx->messages[i].role == CAGE_ROLE_TOOL) {
+        if (ctx->messages[i].role == TINY_ROLE_TOOL) {
             // A run of tool results lands together. Any images among them are
             // sent as one following user message, because a tool message's
             // content is a string and the provider rejects a user message
             // between a call and its results.
             size_t j = i;
             bool has_images = false;
-            for (; j < ctx->messages_len && ctx->messages[j].role == CAGE_ROLE_TOOL; j++) {
+            for (; j < ctx->messages_len && ctx->messages[j].role == TINY_ROLE_TOOL; j++) {
                 add_message(doc, messages, &ctx->messages[j]);
-                if (cage_message_has_image(&ctx->messages[j])) has_images = true;
+                if (tiny_message_has_image(&ctx->messages[j])) has_images = true;
             }
             if (has_images) {
                 yyjson_mut_val *um = yyjson_mut_obj(doc);
@@ -126,10 +126,10 @@ static char *build_request(const cage_model *model, const cage_context *ctx,
                 yyjson_mut_obj_add_strcpy(doc, head, "type", "text");
                 yyjson_mut_obj_add_strcpy(doc, head, "text", "Attached image(s) from tool result:");
                 for (size_t m = i; m < j; m++) {
-                    const cage_message *msg = &ctx->messages[m];
+                    const tiny_message *msg = &ctx->messages[m];
                     for (size_t k = 0; k < msg->blocks_len; k++) {
-                        const cage_block *b = &msg->blocks[k];
-                        if (b->type != CAGE_BLOCK_IMAGE) continue;
+                        const tiny_block *b = &msg->blocks[k];
+                        if (b->type != TINY_BLOCK_IMAGE) continue;
                         yyjson_mut_val *iu = yyjson_mut_obj(doc);
                         yyjson_mut_arr_add_val(content, iu);
                         yyjson_mut_obj_add_strcpy(doc, iu, "type", "image_url");
@@ -165,12 +165,12 @@ static char *build_request(const cage_model *model, const cage_context *ctx,
 typedef struct {
     char *id;
     char *name;
-    cage_buf args;
+    tiny_buf args;
 } tool_acc;
 
 typedef struct {
-    cage_buf text;
-    cage_buf reasoning;
+    tiny_buf text;
+    tiny_buf reasoning;
     tool_acc *calls;
     size_t calls_len;
     char *finish_reason;
@@ -178,7 +178,7 @@ typedef struct {
     long tokens_out;
     long tokens_total;
     char *error;
-    cage_stream_fn emit;
+    tiny_stream_fn emit;
     void *user;
 } sse_state;
 
@@ -195,7 +195,7 @@ static void handle_delta(sse_state *st, yyjson_val *delta) {
     if (yyjson_is_str(content) && yyjson_get_str(content)[0]) {
         const char *s = yyjson_get_str(content);
         buf_add(&st->text, s, strlen(s));
-        cage_emit_delta(st->emit, st->user, CAGE_STREAM_TEXT_DELTA, s);
+        tiny_emit_delta(st->emit, st->user, TINY_STREAM_TEXT_DELTA, s);
     }
 
     static const char *const reasoning_fields[] = {"reasoning_content", "reasoning", "reasoning_text"};
@@ -204,7 +204,7 @@ static void handle_delta(sse_state *st, yyjson_val *delta) {
         if (!yyjson_is_str(r) || !yyjson_get_str(r)[0]) continue;
         const char *s = yyjson_get_str(r);
         buf_add(&st->reasoning, s, strlen(s));
-        cage_emit_delta(st->emit, st->user, CAGE_STREAM_REASONING_DELTA, s);
+        tiny_emit_delta(st->emit, st->user, TINY_STREAM_REASONING_DELTA, s);
         break;
     }
 
@@ -297,13 +297,13 @@ static void sse_free(sse_state *st) {
     free(st->error);
 }
 
-static void finalize(sse_state *st, cage_message *out) {
-    cage_add_text_block(out, CAGE_BLOCK_THINKING, st->reasoning.data);
-    cage_add_text_block(out, CAGE_BLOCK_TEXT, st->text.data);
+static void finalize(sse_state *st, tiny_message *out) {
+    tiny_add_text_block(out, TINY_BLOCK_THINKING, st->reasoning.data);
+    tiny_add_text_block(out, TINY_BLOCK_TEXT, st->text.data);
     for (size_t i = 0; i < st->calls_len; i++) {
         tool_acc *a = &st->calls[i];
         if (!a->name && a->args.len == 0) continue;
-        cage_add_tool_block(out, a->id, a->name, a->args.len ? a->args.data : NULL, st->emit, st->user);
+        tiny_add_tool_block(out, a->id, a->name, a->args.len ? a->args.data : NULL, st->emit, st->user);
     }
     out->tokens_in = st->tokens_in;
     out->tokens_out = st->tokens_out;
@@ -316,21 +316,21 @@ static void finalize(sse_state *st, cage_message *out) {
 // ---- transport ------------------------------------------------------------
 
 
-int cage_openai_completions_stream(const cage_model *model, const cage_context *ctx,
-                                   const cage_stream_opts *opts,
-                                   cage_stream_fn emit, void *user,
+int tiny_openai_completions_stream(const tiny_model *model, const tiny_context *ctx,
+                                   const tiny_stream_opts *opts,
+                                   tiny_stream_fn emit, void *user,
                                    const volatile bool *cancel,
-                                   cage_message *out, char **err) {
+                                   tiny_message *out, char **err) {
     if (err) *err = NULL;
     memset(out, 0, sizeof *out);
-    out->role = CAGE_ROLE_ASSISTANT;
+    out->role = TINY_ROLE_ASSISTANT;
 
-    char *url = cage_url_endpoint(model->base_url, "chat/completions");
-    if (!url) return cage_fail(err, "provider: no base url");
+    char *url = tiny_url_endpoint(model->base_url, "chat/completions");
+    if (!url) return tiny_fail(err, "provider: no base url");
     char *body = build_request(model, ctx, opts);
     if (!body) {
         free(url);
-        return cage_fail(err, "provider: cannot build request");
+        return tiny_fail(err, "provider: cannot build request");
     }
 
     sse_state st = {0};
@@ -346,17 +346,17 @@ int cage_openai_completions_stream(const cage_model *model, const cage_context *
         extra[0] = session;
     }
 
-    cage_api_result r = cage_api_post(url, body, "Authorization: Bearer ",
+    tiny_api_result r = tiny_api_post(url, body, "Authorization: Bearer ",
                                       model->api_key, extra, cancel, on_data, &st, st.error, err);
     free(session);
 
     int rc;
-    if (r == CAGE_API_ABORTED) {
+    if (r == TINY_API_ABORTED) {
         out->stop_reason = xstrdup("aborted");
         rc = 0;
-    } else if (r == CAGE_API_TRANSPORT_ERROR) {
+    } else if (r == TINY_API_TRANSPORT_ERROR) {
         rc = -1;
-    } else if (r == CAGE_API_STREAM_ERROR) {
+    } else if (r == TINY_API_STREAM_ERROR) {
         out->stop_reason = xstrdup("error");
         out->error_message = xstrdup(st.error);
         rc = 0;

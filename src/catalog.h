@@ -1,7 +1,7 @@
 // Model metadata generated from models.dev.
 
-#ifndef CAGE_CATALOG_H
-#define CAGE_CATALOG_H
+#ifndef TINY_CATALOG_H
+#define TINY_CATALOG_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -17,20 +17,20 @@ typedef struct {
     long context_limit;         // context window in tokens, 0 when unknown
     const char *const *effort;  // accepted reasoning_effort values; NULL when the
     size_t effort_len;          // model exposes no effort option
-} cage_model_info;
+} tiny_model_info;
 
 // Looks up provider/model. Returns NULL when the catalog has no entry, and the
 // caller then falls back to its assumed defaults.
-const cage_model_info *cage_catalog_lookup(const char *provider, const char *model);
+const tiny_model_info *tiny_catalog_lookup(const char *provider, const char *model);
 
 // Iteration over the compiled-in table, for listing a provider's models.
-size_t cage_catalog_count(void);
-const cage_model_info *cage_catalog_get(size_t index);
+size_t tiny_catalog_count(void);
+const tiny_model_info *tiny_catalog_get(size_t index);
 
 // Clamps a desired effort to what `info` accepts, preferring the next higher
 // level when the exact value is unavailable. Returns a level from the entry's
 // own list, or NULL when the desired effort is NULL. When `info` is NULL the
 // desired value is returned unchanged (unknown model).
-const char *cage_catalog_clamp_effort(const cage_model_info *info, const char *desired);
+const char *tiny_catalog_clamp_effort(const tiny_model_info *info, const char *desired);
 
 #endif

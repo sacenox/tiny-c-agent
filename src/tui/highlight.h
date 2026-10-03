@@ -1,9 +1,10 @@
 // tiny TUI syntax highlighting, over a committed block, once.
 //
-// Grammars come from tree-sitter; queries ship as data and are read from the
-// usual nvim / tree-sitter query directories. Only a capture name reaches the
-// palette. When no grammar or query is available, the text passes through
-// unchanged.
+// Grammars are compiled in: some come from pkg-config, the rest are vendored
+// and built from source. The highlights queries live in vendor/queries and are
+// compiled into the binary (src/queries.generated.c). Only a capture name
+// reaches the palette. When no grammar is available for a language, the text
+// passes through unchanged.
 
 #ifndef TINY_TUI_HIGHLIGHT_H
 #define TINY_TUI_HIGHLIGHT_H

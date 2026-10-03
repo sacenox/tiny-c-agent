@@ -129,6 +129,7 @@ typedef struct {
     char *call_id;
     char *name;
     tiny_buf args;
+    bool started;
 } call_acc;
 
 typedef struct {
@@ -186,6 +187,10 @@ static void on_data(const char *json, size_t len, void *user) {
             yyjson_val *nm = yyjson_obj_get(item, "name");
             if (yyjson_is_str(id)) tiny_set_str(&a->call_id, yyjson_get_str(id));
             if (yyjson_is_str(nm)) tiny_set_str(&a->name, yyjson_get_str(nm));
+            if (!a->started && a->name && a->name[0]) {
+                a->started = true;
+                tiny_emit_tool_start(st->emit, st->user, a->call_id, a->name);
+            }
         }
     } else if (strcmp(type, "response.output_text.delta") == 0 ||
                strcmp(type, "response.refusal.delta") == 0) {
@@ -234,6 +239,10 @@ static void on_data(const char *json, size_t len, void *user) {
                 yyjson_val *ar = yyjson_obj_get(item, "arguments");
                 if (yyjson_is_str(id)) tiny_set_str(&a->call_id, yyjson_get_str(id));
                 if (yyjson_is_str(nm)) tiny_set_str(&a->name, yyjson_get_str(nm));
+                if (!a->started && a->name && a->name[0]) {
+                    a->started = true;
+                    tiny_emit_tool_start(st->emit, st->user, a->call_id, a->name);
+                }
                 if (yyjson_is_str(ar) && !a->args.len)
                     buf_add(&a->args, yyjson_get_str(ar), strlen(yyjson_get_str(ar)));
             }

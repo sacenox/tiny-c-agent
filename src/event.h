@@ -25,6 +25,7 @@ typedef enum {
     TINY_EVENT_PHASE,
     TINY_EVENT_TEXT,        // assistant text delta
     TINY_EVENT_REASONING,   // reasoning delta
+    TINY_EVENT_TOOL_CALL_START, // the model began the tool call; name is known
     TINY_EVENT_TOOL_CALL,   // the model requested the tool; arguments is JSON
     TINY_EVENT_TOOL_OUTPUT, // stdout/stdout-like chunk from the tool
     TINY_EVENT_TOOL_RESULT, // the tool finished
@@ -41,6 +42,7 @@ typedef struct {
         struct { tiny_phase phase; const char *detail; } phase;
         struct { const char *delta; } text;
         struct { const char *delta; } reasoning;
+        struct { const char *name; } tool_call_start;
         struct { const char *name; const char *arguments; } tool_call;
         struct { const char *chunk; } tool_output;
         struct {

@@ -28,4 +28,10 @@ tiny_file_diff *tiny_snapshot_diff(const struct tiny_snapshot *before,
                                    const struct tiny_snapshot *after, size_t *len);
 void tiny_file_diffs_free(tiny_file_diff *diffs, size_t len);
 
+// A unified diff of two in-memory texts, with the same header a working-tree
+// patch carries. `a`/`b` may be NULL when their length is 0. The caller owns
+// the result.
+char *tiny_unified_diff(const char *path, const char *a, size_t alen,
+                        const char *b, size_t blen);
+
 #endif

@@ -71,6 +71,7 @@ void tiny_headless_event(const tiny_event *e, void *user) {
         break;
     case TINY_EVENT_MESSAGE:
     case TINY_EVENT_REASONING:
+    case TINY_EVENT_TOOL_CALL_START:
     case TINY_EVENT_COMPLETE:
         break;
     }

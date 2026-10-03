@@ -178,6 +178,7 @@ typedef struct {
     char *id;
     char *name;
     tiny_buf args;
+    bool started;
 } block_acc;
 
 typedef struct {
@@ -240,6 +241,10 @@ static void on_data(const char *json, size_t len, void *user) {
             yyjson_val *nm = yyjson_obj_get(cb, "name");
             if (yyjson_is_str(id)) tiny_set_str(&b->id, yyjson_get_str(id));
             if (yyjson_is_str(nm)) tiny_set_str(&b->name, yyjson_get_str(nm));
+            if (!b->started && b->name && b->name[0]) {
+                b->started = true;
+                tiny_emit_tool_start(st->emit, st->user, b->id, b->name);
+            }
         } else if (strcmp(bts, "thinking") == 0 || strcmp(bts, "redacted_thinking") == 0) {
             b->type = BLK_THINKING;
         } else {

@@ -28,6 +28,7 @@ int tiny_resolve_model(const tiny_config *cfg, tiny_model *out, char **err) {
     // images surfaces the provider error as-is.
     const tiny_model_info *info = tiny_catalog_lookup(tiny_provider_canonical(cfg->provider), cfg->model);
     out->supports_images = info ? info->supports_images : true;
+    out->max_tokens = info ? info->max_output : 0;
     out->effort = tiny_catalog_clamp_effort(info, cfg->effort);
 
     if (strcmp(cfg->provider, "opencode-go") == 0) {

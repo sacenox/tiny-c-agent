@@ -15,6 +15,7 @@ typedef struct {
     const char *name;           // human-readable name
     bool supports_images;       // whether the model accepts image input
     long context_limit;         // context window in tokens, 0 when unknown
+    long max_output;            // maximum reply tokens, 0 when unknown
     const char *const *effort;  // accepted reasoning_effort values; NULL when the
     size_t effort_len;          // model exposes no effort option
 } tiny_model_info;

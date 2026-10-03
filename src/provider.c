@@ -26,6 +26,16 @@ void tiny_emit_delta(tiny_stream_fn emit, void *user, tiny_stream_type type, con
     emit(&ev, user);
 }
 
+void tiny_emit_tool_start(tiny_stream_fn emit, void *user, const char *id, const char *name) {
+    if (!emit) return;
+    tiny_stream_event ev = {
+        .type = TINY_STREAM_TOOL_CALL_START,
+        .tool_call_id = id,
+        .tool_name = name,
+    };
+    emit(&ev, user);
+}
+
 void tiny_add_text_block(tiny_message *out, tiny_block_type type, const char *text) {
     if (!text || !text[0]) return;
     tiny_block *b = tiny_message_add_block(out, type);

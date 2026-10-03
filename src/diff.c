@@ -435,8 +435,8 @@ static void add_range(char *dst, size_t cap, size_t start, size_t count) {
     else snprintf(dst, cap, "%zu,%zu", start, count);
 }
 
-static char *unified(const char *path, const char *a, size_t alen,
-                     const char *b, size_t blen) {
+char *tiny_unified_diff(const char *path, const char *a, size_t alen,
+                        const char *b, size_t blen) {
     size_t na, nb;
     line *la = split_lines(a, alen, &na);
     line *lb = split_lines(b, blen, &nb);
@@ -532,7 +532,7 @@ static bool diff_one(const char *path, const file_state *before,
         } else if (after->content == NULL) {
             out->note = note_text(after->kind, "created");
         } else {
-            out->patch = unified(path, "", 0, after->content, after->size);
+            out->patch = tiny_unified_diff(path, "", 0, after->content, after->size);
         }
         return true;
     }
@@ -542,7 +542,7 @@ static bool diff_one(const char *path, const file_state *before,
         } else if (before->content == NULL) {
             out->note = note_text(before->kind, "deleted");
         } else {
-            out->patch = unified(path, before->content, before->size, "", 0);
+            out->patch = tiny_unified_diff(path, before->content, before->size, "", 0);
         }
         return true;
     }
@@ -557,7 +557,7 @@ static bool diff_one(const char *path, const file_state *before,
     if (before->content != NULL && after->content != NULL) {
         if (before->size == after->size && memcmp(before->content, after->content, before->size) == 0)
             return false;
-        out->patch = unified(path, before->content, before->size, after->content, after->size);
+        out->patch = tiny_unified_diff(path, before->content, before->size, after->content, after->size);
         return true;
     }
     if (before->size == after->size && before->ino == after->ino &&

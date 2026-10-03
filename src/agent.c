@@ -111,6 +111,10 @@ static void on_stream(const tiny_stream_event *ev, void *user) {
         e.type = TINY_EVENT_REASONING;
         e.u.reasoning.delta = ev->delta;
         break;
+    case TINY_STREAM_TOOL_CALL_START:
+        e.type = TINY_EVENT_TOOL_CALL_START;
+        e.u.tool_call_start.name = ev->tool_name;
+        break;
     case TINY_STREAM_TOOL_CALL:
         e.type = TINY_EVENT_TOOL_CALL;
         e.u.tool_call.name = ev->tool_name;
@@ -133,8 +137,10 @@ static tiny_tool_result run_tool(tiny_agent *a, turn_state *st, const tiny_block
     const char *name = b->tool_name ? b->tool_name : "";
     const char *args = b->arguments ? b->arguments : "{}";
 
-    // Only the tools that can write get a tree diff around them.
-    if (strcmp(name, "edit") != 0 && strcmp(name, "bash") != 0)
+    // Only bash can write anywhere under the working directory, so a diff of
+    // the tree around it is the only way to report what changed. `edit` reports
+    // its own diff from the content it already read.
+    if (strcmp(name, "bash") != 0)
         return tiny_tool_run(name, args, a->model.supports_images, on_tool_output, st, a->cancel);
 
     // The tool may write anywhere under the working directory, so a diff of the

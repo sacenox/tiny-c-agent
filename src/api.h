@@ -15,6 +15,10 @@ void tiny_json_tool(yyjson_mut_doc *doc, yyjson_mut_val *obj, const tiny_tool *t
 // Emits one delta to the adapter's stream callback, if any.
 void tiny_emit_delta(tiny_stream_fn emit, void *user, tiny_stream_type type, const char *delta);
 
+// Emits TINY_STREAM_TOOL_CALL_START. Call once per tool call block, as soon as
+// its name is known, before the arguments have finished streaming.
+void tiny_emit_tool_start(tiny_stream_fn emit, void *user, const char *id, const char *name);
+
 // Appends a text/thinking block when `text` is non-NULL and non-empty.
 void tiny_add_text_block(tiny_message *out, tiny_block_type type, const char *text);
 

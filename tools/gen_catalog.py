@@ -60,6 +60,7 @@ def main():
                 m.get("name") or mid,
                 bool(m.get("attachment")),
                 int((m.get("limit") or {}).get("context") or 0),
+                int((m.get("limit") or {}).get("output") or 0),
                 ident,
                 elen,
             ))
@@ -77,10 +78,10 @@ def main():
     if arrays:
         lines.append("")
     lines.append("const tiny_model_info tiny_catalog_entries[] = {")
-    for provider, mid, name, images, ctx, ident, elen in rows:
-        lines.append("    {%s, %s, %s, %s, %dL, %s, %d}," % (
+    for provider, mid, name, images, ctx, maxout, ident, elen in rows:
+        lines.append("    {%s, %s, %s, %s, %dL, %dL, %s, %d}," % (
             cstr(provider), cstr(mid), cstr(name),
-            "true" if images else "false", ctx, ident, elen))
+            "true" if images else "false", ctx, maxout, ident, elen))
     lines += [
         "};",
         "",

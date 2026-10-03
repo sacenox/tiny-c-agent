@@ -201,6 +201,7 @@ static void add_call(google_state *st, const char *name, yyjson_val *args) {
     char id[64];
     snprintf(id, sizeof id, "%s_%zu", c->name, st->calls_len);
     c->id = xstrdup(id);
+    if (c->name[0]) tiny_emit_tool_start(st->emit, st->user, c->id, c->name);
     if (args) {
         size_t len = 0;
         char *txt = yyjson_val_write(args, 0, &len);

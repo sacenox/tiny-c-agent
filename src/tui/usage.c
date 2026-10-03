@@ -18,17 +18,24 @@ static void trim_zeros(char *s) {
 }
 
 char *tiny_format_tokens(long n) {
-    char tmp[48];
+    char num[48];
+    const char *unit = "";
     if (n < 1000) {
-        snprintf(tmp, sizeof tmp, "%ld", n);
+        snprintf(num, sizeof num, "%ld", n);
     } else if (n < 1000000) {
-        snprintf(tmp, sizeof tmp, "%.1fk", (double)n / 1000.0);
-        trim_zeros(tmp);
+        snprintf(num, sizeof num, "%.1f", (double)n / 1000.0);
+        unit = "k";
     } else {
-        snprintf(tmp, sizeof tmp, "%.2fM", (double)n / 1000000.0);
-        trim_zeros(tmp);
+        snprintf(num, sizeof num, "%.2f", (double)n / 1000000.0);
+        unit = "M";
     }
-    return strdup(tmp);
+    // Trailing zeros come off the number, before the unit is appended.
+    trim_zeros(num);
+    tui_buf b;
+    buf_init(&b);
+    buf_adds(&b, num);
+    buf_adds(&b, unit);
+    return buf_steal(&b);
 }
 
 char *tiny_context_usage_line(long used, long window, long max_tokens) {

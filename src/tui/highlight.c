@@ -6,75 +6,41 @@
 
 #include <tree_sitter/api.h>
 
+#include <tree_sitter/tree-sitter-c.h>
+#include <tree_sitter/tree-sitter-python.h>
 #include <tree_sitter/tree-sitter-javascript.h>
 #include <tree_sitter/tree-sitter-bash.h>
 #include <tree_sitter/tree-sitter-markdown.h>
 #include <tree_sitter/tree-sitter-markdown-inline.h>
 
+#include "tree-sitter-make.h"
+#include "tree-sitter-typescript.h"
+#include "tree-sitter-tsx.h"
+
+#include "queries.h"
 #include "util.h"
 #include "theme.h"
-#include "util.h"
 
 typedef struct {
     TSParser *parser;
     TSQuery *query;
 } syntax;
 
-// Reads a highlights query for `lang` from the usual locations, or NULL.
-static char *read_query(const char *lang) {
-    const char *env = getenv("TINY_QUERIES_DIR");
-    const char *home = getenv("HOME");
-    char path[4096];
-    if (env && env[0]) {
-        snprintf(path, sizeof path, "%s/%s/highlights.scm", env, lang);
-        char *q = tiny_read_file(path);
-        if (q) return q;
-    }
-    const char *tmpl[] = {
-        "/usr/share/tree-sitter/queries/%s/highlights.scm",
-        "/usr/share/nvim/runtime/queries/%s/highlights.scm",
-        "%s/.local/share/nvim/lazy/nvim-treesitter/runtime/queries/%s/highlights.scm",
-    };
-    for (size_t i = 0; i < sizeof tmpl / sizeof tmpl[0]; i++) {
-        if (i == 2) {
-            if (!home || !home[0]) break;
-            snprintf(path, sizeof path, tmpl[i], home, lang);
-        } else {
-            snprintf(path, sizeof path, tmpl[i], lang);
-        }
-        char *q = tiny_read_file(path);
-        if (q) return q;
-    }
-    return NULL;
-}
-
-static syntax *syntax_open(const TSLanguage *lang, const char *const *langs, size_t nlangs) {
+static syntax *syntax_open(const TSLanguage *lang, const char *name) {
     if (!lang) return NULL;
     TSParser *parser = ts_parser_new();
     if (!ts_parser_set_language(parser, lang)) {
         ts_parser_delete(parser);
         return NULL;
     }
-    tui_buf src;
-    buf_init(&src);
-    bool any = false;
-    for (size_t i = 0; i < nlangs; i++) {
-        char *q = read_query(langs[i]);
-        if (!q) continue;
-        if (any) buf_addc(&src, '\n');
-        buf_adds(&src, q);
-        any = true;
-        free(q);
-    }
-    if (!any) {
-        buf_free(&src);
+    const char *src = tiny_query_for(name);
+    if (!src) {
         ts_parser_delete(parser);
         return NULL;
     }
     uint32_t error_offset = 0;
     TSQueryError error_type = TSQueryErrorNone;
-    TSQuery *query = ts_query_new(lang, src.data, (uint32_t)src.len, &error_offset, &error_type);
-    buf_free(&src);
+    TSQuery *query = ts_query_new(lang, src, (uint32_t)strlen(src), &error_offset, &error_type);
     if (!query) {
         ts_parser_delete(parser);
         return NULL;
@@ -88,44 +54,77 @@ static syntax *syntax_open(const TSLanguage *lang, const char *const *langs, siz
 
 // Lazily built grammars; `seen` records that we tried, so a missing grammar is
 // not re-probed on every block.
-static syntax *JS;
-static syntax *BASH;
-static syntax *MD;
-static syntax *MD_INLINE;
-static bool js_seen, bash_seen, md_seen, md_inline_seen;
+static syntax *C, *PY, *JS, *BASH, *MAKE, *TS, *TSX, *MD, *MD_INLINE;
+static bool c_seen, py_seen, js_seen, bash_seen, make_seen, ts_seen, tsx_seen, md_seen, md_inline_seen;
+
+static syntax *grammar_c(void) {
+    if (!c_seen) {
+        c_seen = true;
+        C = syntax_open(tree_sitter_c(), "c");
+    }
+    return C;
+}
+
+static syntax *grammar_python(void) {
+    if (!py_seen) {
+        py_seen = true;
+        PY = syntax_open(tree_sitter_python(), "python");
+    }
+    return PY;
+}
 
 static syntax *grammar_js(void) {
-    static const char *langs[] = {"javascript"};
     if (!js_seen) {
         js_seen = true;
-        JS = syntax_open(tree_sitter_javascript(), langs, 1);
+        JS = syntax_open(tree_sitter_javascript(), "javascript");
     }
     return JS;
 }
 
 static syntax *grammar_bash(void) {
-    static const char *langs[] = {"bash"};
     if (!bash_seen) {
         bash_seen = true;
-        BASH = syntax_open(tree_sitter_bash(), langs, 1);
+        BASH = syntax_open(tree_sitter_bash(), "bash");
     }
     return BASH;
 }
 
+static syntax *grammar_make(void) {
+    if (!make_seen) {
+        make_seen = true;
+        MAKE = syntax_open(tree_sitter_make(), "make");
+    }
+    return MAKE;
+}
+
+static syntax *grammar_ts(void) {
+    if (!ts_seen) {
+        ts_seen = true;
+        TS = syntax_open(tree_sitter_typescript(), "typescript");
+    }
+    return TS;
+}
+
+static syntax *grammar_tsx(void) {
+    if (!tsx_seen) {
+        tsx_seen = true;
+        TSX = syntax_open(tree_sitter_tsx(), "typescript");
+    }
+    return TSX;
+}
+
 static syntax *grammar_md(void) {
-    static const char *langs[] = {"markdown"};
     if (!md_seen) {
         md_seen = true;
-        MD = syntax_open(tree_sitter_markdown(), langs, 1);
+        MD = syntax_open(tree_sitter_markdown(), "markdown");
     }
     return MD;
 }
 
 static syntax *grammar_md_inline(void) {
-    static const char *langs[] = {"markdown_inline"};
     if (!md_inline_seen) {
         md_inline_seen = true;
-        MD_INLINE = syntax_open(tree_sitter_markdown_inline(), langs, 1);
+        MD_INLINE = syntax_open(tree_sitter_markdown_inline(), "markdown_inline");
     }
     return MD_INLINE;
 }
@@ -379,7 +378,12 @@ char *tiny_highlight_code(const char *info, const char *text) {
         i++;
     }
     lang[i] = '\0';
-    if (strcmp(lang, "js") == 0 || strcmp(lang, "javascript") == 0 || strcmp(lang, "jsx") == 0) s = grammar_js();
+    if (strcmp(lang, "c") == 0) s = grammar_c();
+    else if (strcmp(lang, "python") == 0 || strcmp(lang, "py") == 0) s = grammar_python();
+    else if (strcmp(lang, "js") == 0 || strcmp(lang, "javascript") == 0 || strcmp(lang, "jsx") == 0) s = grammar_js();
+    else if (strcmp(lang, "ts") == 0 || strcmp(lang, "typescript") == 0) s = grammar_ts();
+    else if (strcmp(lang, "tsx") == 0) s = grammar_tsx();
+    else if (strcmp(lang, "make") == 0 || strcmp(lang, "makefile") == 0) s = grammar_make();
     else if (strcmp(lang, "bash") == 0 || strcmp(lang, "sh") == 0 || strcmp(lang, "shell") == 0) s = grammar_bash();
     if (!s) return strdup(text);
     size_t len = strlen(text);

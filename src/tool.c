@@ -18,6 +18,7 @@
 
 #include <yyjson.h>
 
+#include "diff.h"
 #include "util.h"
 
 #define MAX_TEXT 100000
@@ -304,8 +305,14 @@ static void tool_edit(const char *args, tiny_tool_result *res) {
             yyjson_doc_free(doc);
             return;
         }
-        res->text = xmalloc(strlen(path) + 16);
-        sprintf(res->text, "created %s", path);
+        char *patch = tiny_unified_diff(path, "", 0, nw, new_len);
+        tui_buf b;
+        buf_init(&b);
+        buf_addf(&b, "created %s\n", path);
+        buf_adds(&b, patch);
+        res->text = buf_steal(&b);
+        buf_free(&b);
+        free(patch);
         yyjson_doc_free(doc);
         return;
     }
@@ -345,8 +352,14 @@ static void tool_edit(const char *args, tiny_tool_result *res) {
         return;
     }
 
-    res->text = xmalloc(strlen(path) + 16);
-    sprintf(res->text, "edited %s", path);
+    char *patch = tiny_unified_diff(path, data.data, data.len, out.data, out.len);
+    tui_buf b;
+    buf_init(&b);
+    buf_addf(&b, "edited %s\n", path);
+    buf_adds(&b, patch);
+    res->text = buf_steal(&b);
+    buf_free(&b);
+    free(patch);
     free(out.data);
     free(data.data);
     yyjson_doc_free(doc);

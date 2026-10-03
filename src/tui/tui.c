@@ -36,8 +36,24 @@
 #define ELIDED_HEAD 4
 #define ELIDED_TAIL 4
 
-static const char *const SPINNER[] = {
-    "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
+// The braille patterns in mini-coder's order: frame i is U+2800 + SPINNER[i].
+static const unsigned char SPINNER[] = {
+    0, 1, 2, 3, 4, 5, 6, 7, 64, 65, 66, 67, 68, 69, 70, 71,
+    8, 9, 10, 11, 12, 13, 14, 15, 72, 73, 74, 75, 76, 77, 78, 79,
+    16, 17, 18, 19, 20, 21, 22, 23, 80, 81, 82, 83, 84, 85, 86, 87,
+    24, 25, 26, 27, 28, 29, 30, 31, 88, 89, 90, 91, 92, 93, 94, 95,
+    32, 33, 34, 35, 36, 37, 38, 39, 96, 97, 98, 99, 100, 101, 102, 103,
+    40, 41, 42, 43, 44, 45, 46, 47, 104, 105, 106, 107, 108, 109, 110, 111,
+    48, 49, 50, 51, 52, 53, 54, 55, 112, 113, 114, 115, 116, 117, 118, 119,
+    56, 57, 58, 59, 60, 61, 62, 63, 120, 121, 122, 123, 124, 125, 126, 127,
+    128, 129, 130, 131, 132, 133, 134, 135, 192, 193, 194, 195, 196, 197, 198, 199,
+    136, 137, 138, 139, 140, 141, 142, 143, 200, 201, 202, 203, 204, 205, 206, 207,
+    144, 145, 146, 147, 148, 149, 150, 151, 208, 209, 210, 211, 212, 213, 214, 215,
+    152, 153, 154, 155, 156, 157, 158, 159, 216, 217, 218, 219, 220, 221, 222, 223,
+    160, 161, 162, 163, 164, 165, 166, 167, 224, 225, 226, 227, 228, 229, 230, 231,
+    168, 169, 170, 171, 172, 173, 174, 175, 232, 233, 234, 235, 236, 237, 238, 239,
+    176, 177, 178, 179, 180, 181, 182, 183, 240, 241, 242, 243, 244, 245, 246, 247,
+    184, 185, 186, 187, 188, 189, 190, 191, 248, 249, 250, 251, 252, 253, 254, 255,
 };
 
 static const char *const BODY_PREFIX = " | ";
@@ -455,7 +471,7 @@ static char *call_summary(const char *name, const char *arguments) {
 // ---- status ----------------------------------------------------------------
 
 static char *status_line(tui *t) {
-    char *usage = tiny_context_usage_line(t->ctx_used, t->context_window, 0);
+    char *usage = tiny_context_usage_line(t->ctx_used, t->context_window, t->model.max_tokens);
     if (t->paused || t->phase == TINY_PHASE_PAUSING) {
         tui_buf b;
         buf_init(&b);
@@ -488,9 +504,11 @@ static char *status_line(tui *t) {
     }
     tui_buf phase;
     buf_init(&phase);
+    char spin[8];
+    int sn = tiny_utf8_encode(0x2800u + SPINNER[t->frame % (int)(sizeof SPINNER / sizeof SPINNER[0])], spin);
+    spin[sn] = '\0';
     char text[192];
-    snprintf(text, sizeof text, "%s %s · %ds", SPINNER[t->frame % (int)(sizeof SPINNER / sizeof SPINNER[0])],
-             label, (int)elapsed(t));
+    snprintf(text, sizeof text, "%s %s · %ds", spin, label, (int)elapsed(t));
     fg_dim(&phase, text);
 
     tui_buf out;
@@ -733,6 +751,10 @@ static void on_event(const tiny_event *e, void *user) {
         }
         break;
     }
+    case TINY_EVENT_TOOL_CALL_START:
+        free(t->writing_tool);
+        t->writing_tool = e->u.tool_call_start.name ? xstrdup(e->u.tool_call_start.name) : NULL;
+        break;
     case TINY_EVENT_TOOL_CALL: {
         free(t->writing_tool);
         t->writing_tool = NULL;
@@ -758,9 +780,11 @@ static void on_event(const tiny_event *e, void *user) {
         buf_free(&b);
         break;
     }
-    case TINY_EVENT_TOOL_OUTPUT:
-        // Tool output is not streamed live; the result carries it.
+    case TINY_EVENT_TOOL_OUTPUT: {
+        size_t z;
+        tiny_tailstream_feed(&t->activity, e->u.tool_output.chunk, &z);
         break;
+    }
     case TINY_EVENT_TOOL_RESULT:
         activity_reset(t);
         commit_tool_result(t, e->u.tool_result.name, e->u.tool_result.text, e->u.tool_result.is_error,
@@ -781,9 +805,13 @@ static void on_event(const tiny_event *e, void *user) {
         end_turn_buf(t, &b);
         break;
     }
-    case TINY_EVENT_NO_MODEL:
-        end_turn(t, "\x1b[38;2;247;118;142m! no model configured\x1b[39m");
+    case TINY_EVENT_NO_MODEL: {
+        tui_buf b;
+        buf_init(&b);
+        fg_red(&b, "! no model configured");
+        end_turn_buf(t, &b);
         break;
+    }
     case TINY_EVENT_CANCELLED: {
         tui_buf b;
         buf_init(&b);

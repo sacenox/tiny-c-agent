@@ -25,6 +25,9 @@ typedef struct {
     // Whether the model accepts image input. Gates whether `read` attaches
     // images. The generated catalog will set this per model.
     bool supports_images;
+    // The largest reply the model accepts, from the catalog. 0 when unknown.
+    // The context readout uses it to tell when the next request could not fit.
+    long max_tokens;
     // Providers that route by conversation send this header with the session
     // id. NULL when the provider does not need one.
     const char *session_header;
@@ -53,7 +56,8 @@ typedef struct {
 typedef enum {
     TINY_STREAM_TEXT_DELTA,
     TINY_STREAM_REASONING_DELTA,
-    TINY_STREAM_TOOL_CALL,
+    TINY_STREAM_TOOL_CALL_START, // a tool call block began; name is known
+    TINY_STREAM_TOOL_CALL,       // a tool call block finished
 } tiny_stream_type;
 
 typedef struct {

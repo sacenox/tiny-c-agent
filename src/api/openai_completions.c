@@ -166,6 +166,7 @@ typedef struct {
     char *id;
     char *name;
     tiny_buf args;
+    bool started;
 } tool_acc;
 
 typedef struct {
@@ -228,6 +229,10 @@ static void handle_delta(sse_state *st, yyjson_val *delta) {
         if (yyjson_is_str(name)) {
             free(a->name);
             a->name = xstrdup(yyjson_get_str(name));
+        }
+        if (!a->started && a->name && a->name[0]) {
+            a->started = true;
+            tiny_emit_tool_start(st->emit, st->user, a->id, a->name);
         }
         yyjson_val *args = yyjson_obj_get(fn, "arguments");
         if (yyjson_is_str(args)) {

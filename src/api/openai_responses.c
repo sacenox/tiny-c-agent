@@ -147,12 +147,25 @@ typedef struct {
     void *user;
 } resp_state;
 
+// An untrusted stream index is a hint, never a size. Anything past this is
+// treated like a missing index so a hostile chunk cannot force an allocation.
+#define MAX_STREAM_INDEX 10000
+
 static void grow_calls(resp_state *st, size_t count) {
     if (count <= st->calls_len) return;
     st->calls = realloc(st->calls, count * sizeof *st->calls);
     if (!st->calls) abort();
     memset(&st->calls[st->calls_len], 0, (count - st->calls_len) * sizeof *st->calls);
     st->calls_len = count;
+}
+
+// A stream index from the wire, or `fallback` when absent, negative, or past
+// the bound. An untrusted index is a hint, never a size, so it cannot force an
+// allocation.
+static size_t stream_index(yyjson_val *iv, size_t fallback) {
+    if (!yyjson_is_int(iv)) return fallback;
+    long i = (long)yyjson_get_int(iv);
+    return i < 0 || i > MAX_STREAM_INDEX ? fallback : (size_t)i;
 }
 
 static void on_data(const char *json, size_t len, void *user) {
@@ -180,7 +193,7 @@ static void on_data(const char *json, size_t len, void *user) {
         yyjson_val *it = yyjson_is_obj(item) ? yyjson_obj_get(item, "type") : NULL;
         if (yyjson_is_str(it) && strcmp(yyjson_get_str(it), "function_call") == 0) {
             yyjson_val *iv = yyjson_obj_get(root, "output_index");
-            size_t index = yyjson_is_int(iv) ? (size_t)yyjson_get_int(iv) : st->calls_len;
+            size_t index = stream_index(iv, st->calls_len);
             grow_calls(st, index + 1);
             call_acc *a = &st->calls[index];
             yyjson_val *id = yyjson_obj_get(item, "call_id");
@@ -210,14 +223,14 @@ static void on_data(const char *json, size_t len, void *user) {
         }
     } else if (strcmp(type, "response.function_call_arguments.delta") == 0) {
         yyjson_val *iv = yyjson_obj_get(root, "output_index");
-        size_t index = yyjson_is_int(iv) ? (size_t)yyjson_get_int(iv) : st->calls_len;
+        size_t index = stream_index(iv, st->calls_len);
         if (index < st->calls_len) {
             yyjson_val *d = yyjson_obj_get(root, "delta");
             if (yyjson_is_str(d)) buf_add(&st->calls[index].args, yyjson_get_str(d), strlen(yyjson_get_str(d)));
         }
     } else if (strcmp(type, "response.function_call_arguments.done") == 0) {
         yyjson_val *iv = yyjson_obj_get(root, "output_index");
-        size_t index = yyjson_is_int(iv) ? (size_t)yyjson_get_int(iv) : st->calls_len;
+        size_t index = stream_index(iv, st->calls_len);
         if (index < st->calls_len) {
             yyjson_val *a = yyjson_obj_get(root, "arguments");
             if (yyjson_is_str(a)) {
@@ -231,7 +244,7 @@ static void on_data(const char *json, size_t len, void *user) {
         yyjson_val *it = yyjson_is_obj(item) ? yyjson_obj_get(item, "type") : NULL;
         if (yyjson_is_str(it) && strcmp(yyjson_get_str(it), "function_call") == 0) {
             yyjson_val *iv = yyjson_obj_get(root, "output_index");
-            size_t index = yyjson_is_int(iv) ? (size_t)yyjson_get_int(iv) : st->calls_len;
+            size_t index = stream_index(iv, st->calls_len);
             if (index < st->calls_len) {
                 call_acc *a = &st->calls[index];
                 yyjson_val *id = yyjson_obj_get(item, "call_id");

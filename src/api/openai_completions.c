@@ -183,6 +183,10 @@ typedef struct {
     void *user;
 } sse_state;
 
+// An untrusted stream index is a hint, never a size. Anything past this is
+// treated like a missing index so a hostile chunk cannot force an allocation.
+#define MAX_STREAM_INDEX 10000
+
 static void grow_calls(sse_state *st, size_t count) {
     if (count <= st->calls_len) return;
     st->calls = realloc(st->calls, count * sizeof *st->calls);
@@ -215,7 +219,8 @@ static void handle_delta(sse_state *st, yyjson_val *delta) {
     yyjson_val *tc;
     yyjson_arr_foreach(tcs, idx, max, tc) {
         yyjson_val *iv = yyjson_obj_get(tc, "index");
-        size_t index = yyjson_is_int(iv) ? (size_t)yyjson_get_int(iv) : st->calls_len;
+        long raw = yyjson_is_int(iv) ? (long)yyjson_get_int(iv) : -1;
+        size_t index = raw >= 0 && (size_t)raw <= MAX_STREAM_INDEX ? (size_t)raw : st->calls_len;
         grow_calls(st, index + 1);
         tool_acc *a = &st->calls[index];
         yyjson_val *id = yyjson_obj_get(tc, "id");

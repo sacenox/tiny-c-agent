@@ -192,6 +192,10 @@ typedef struct {
     void *user;
 } anth_state;
 
+// An untrusted stream index is a hint, never a size. Anything past this is
+// treated like a missing index so a hostile chunk cannot force an allocation.
+#define MAX_STREAM_INDEX 10000
+
 static block_acc *block_at(anth_state *st, size_t index) {
     if (index >= st->blocks_len) {
         st->blocks = realloc(st->blocks, (index + 1) * sizeof *st->blocks);
@@ -227,11 +231,12 @@ static void on_data(const char *json, size_t len, void *user) {
         }
     } else if (strcmp(type, "content_block_start") == 0) {
         yyjson_val *iv = yyjson_obj_get(root, "index");
-        if (!yyjson_is_int(iv)) {
+        long raw = yyjson_is_int(iv) ? (long)yyjson_get_int(iv) : -1;
+        if (raw < 0 || raw > MAX_STREAM_INDEX) {
             yyjson_doc_free(doc);
             return;
         }
-        block_acc *b = block_at(st, (size_t)yyjson_get_int(iv));
+        block_acc *b = block_at(st, (size_t)raw);
         yyjson_val *cb = yyjson_obj_get(root, "content_block");
         yyjson_val *bt = yyjson_is_obj(cb) ? yyjson_obj_get(cb, "type") : NULL;
         const char *bts = yyjson_is_str(bt) ? yyjson_get_str(bt) : "";

@@ -433,7 +433,7 @@ static void tool_bash(const char *args, tiny_tool_output_fn out, void *user,
             break;
         }
         if (pr == 0) continue;
-        ssize_t n = read(pipefd[0], chunk, sizeof chunk);
+        ssize_t n = read(pipefd[0], chunk, sizeof chunk - 1);
         if (n < 0) {
             if (errno == EINTR) continue;
             break;

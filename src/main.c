@@ -69,6 +69,9 @@ int main(int argc, char **argv) {
     tiny_config *cfg = tiny_config_load(config_path, &err);
     if (!cfg) {
         fprintf(stderr, "%s\n", err ? err : "config error");
+        free(err);
+        free(stdin_prompt);
+        curl_global_cleanup();
         return 1;
     }
 
@@ -77,6 +80,10 @@ int main(int argc, char **argv) {
     if (tiny_resolve_model(cfg, &model, &err) != 0) {
         if (print_mode) {
             fprintf(stderr, "%s\n", err ? err : "model error");
+            free(err);
+            tiny_config_free(cfg);
+            free(stdin_prompt);
+            curl_global_cleanup();
             return 1;
         }
         // Keep the interactive TUI usable: the user can pick a provider with
@@ -91,6 +98,10 @@ int main(int argc, char **argv) {
     tiny_resources *resources = tiny_resources_build(cfg, cwd, &err);
     if (!resources) {
         fprintf(stderr, "%s\n", err ? err : "prompt error");
+        free(err);
+        tiny_config_free(cfg);
+        free(stdin_prompt);
+        curl_global_cleanup();
         return 1;
     }
 
@@ -117,6 +128,11 @@ int main(int argc, char **argv) {
     tiny_session *session = tiny_session_open(cfg->sessions_dir, cwd, prompt, &err);
     if (!session) {
         fprintf(stderr, "%s\n", err ? err : "session error");
+        free(err);
+        tiny_resources_free(resources);
+        tiny_config_free(cfg);
+        free(stdin_prompt);
+        curl_global_cleanup();
         return 1;
     }
 

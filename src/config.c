@@ -199,9 +199,11 @@ static int parse_partial(yyjson_val *root, const char *path, partial *p, char **
         size_t idx, max;
         yyjson_val *e;
         yyjson_arr_foreach(v, idx, max, e) {
-            if (parse_provider(e, idx, path, &p->custom_providers[p->custom_providers_len], err) != 0)
-                return -1;
+            // Count the slot before filling it, so a parse failure still frees
+            // the fields that were already set.
             p->custom_providers_len++;
+            if (parse_provider(e, idx, path, &p->custom_providers[p->custom_providers_len - 1], err) != 0)
+                return -1;
         }
     }
     return 0;

@@ -4,7 +4,6 @@
 #include <string.h>
 
 #include "util.h"
-#include "util.h"
 
 #define TAB 4
 
@@ -129,7 +128,6 @@ const char *tiny_editor_text(tiny_editor *e) {
     }
     free(e->text);
     e->text = buf_steal(&b);
-    buf_free(&b);
     e->text_dirty = false;
     return e->text;
 }
@@ -147,29 +145,11 @@ void tiny_editor_clear(tiny_editor *e) {
 
 void tiny_editor_set_text(tiny_editor *e, const char *text) {
     for (size_t i = 0; i < e->nlines; i++) free(e->lines[i]);
-    // Split on newline.
-    size_t cap = 8, n = 0;
-    char **lines = xmalloc(cap * sizeof *lines);
-    const char *p = text;
-    for (;;) {
-        const char *nl = strchr(p, '\n');
-        size_t len = nl ? (size_t)(nl - p) : strlen(p);
-        char *line = xmalloc(len + 1);
-        memcpy(line, p, len);
-        line[len] = '\0';
-        if (n == cap) {
-            cap *= 2;
-            lines = realloc(lines, cap * sizeof *lines);
-            if (!lines) abort();
-        }
-        lines[n++] = line;
-        if (!nl) break;
-        p = nl + 1;
-    }
+    tiny_strv lines = tiny_split_lines(text);
     free(e->lines);
-    e->lines = lines;
-    e->nlines = n;
-    e->row = n - 1;
+    e->lines = lines.v;
+    e->nlines = lines.n;
+    e->row = lines.n - 1;
     e->col = cp_count(e->lines[e->row]);
     e->scroll = 0;
     e->text_dirty = true;
@@ -213,22 +193,20 @@ static size_t col_at_cell(const char *line, int cell) {
 static void caret(tiny_editor *e, int *row_out, int *col_out) {
     char *line = xstrdup(e->lines[e->row]);
     char *expanded = tiny_expand_tabs(line, TAB);
-    size_t nrows;
-    char **chunks = tiny_wrap_line(expanded, e->width, &nrows);
+    tiny_strv chunks = tiny_wrap_line(expanded, e->width);
     size_t ncells;
     int *cells = cells_of(line, &ncells);
     int cell = cells[e->col < ncells ? e->col : ncells - 1];
     free(cells);
     int row = cell / e->width;
-    if (row >= (int)nrows) {
-        *row_out = (int)nrows - 1;
-        *col_out = tiny_display_width(chunks[nrows - 1]);
+    if (row >= (int)chunks.n) {
+        *row_out = (int)chunks.n - 1;
+        *col_out = tiny_display_width(chunks.v[chunks.n - 1]);
     } else {
         *row_out = row;
         *col_out = cell - row * e->width;
     }
-    for (size_t i = 0; i < nrows; i++) free(chunks[i]);
-    free(chunks);
+    strv_free(&chunks);
     free(expanded);
     free(line);
 }
@@ -247,17 +225,11 @@ static void line_splice(tiny_editor *e, const char *line, size_t start, size_t e
     free(after);
     free(e->lines[e->row]);
     e->lines[e->row] = buf_steal(&b);
-    buf_free(&b);
     e->text_dirty = true;
 }
 
 static void insert_text(tiny_editor *e, const char *text) {
-    // Split `text` on newlines.
-    size_t nparts = 1;
-    for (const char *p = text; *p; p++)
-        if (*p == '\n') nparts++;
-
-    if (nparts == 1) {
+    if (!strchr(text, '\n')) {
         line_splice(e, e->lines[e->row], e->col, e->col, text);
         e->col += cp_count(text);
         return;
@@ -268,30 +240,28 @@ static void insert_text(tiny_editor *e, const char *text) {
     char *after = cp_slice(line, e->col, cp_count(line));
 
     // Build the replacement lines.
-    size_t n;
-    char **parts = tiny_split_lines(text, &n);
+    tiny_strv parts = tiny_split_lines(text);
+    size_t n = parts.n;
 
     tui_buf head;
     buf_init(&head);
     buf_adds(&head, before);
-    buf_adds(&head, parts[0]);
+    buf_adds(&head, parts.v[0]);
     tui_buf tail;
     buf_init(&tail);
-    buf_adds(&tail, parts[n - 1]);
+    buf_adds(&tail, parts.v[n - 1]);
     buf_adds(&tail, after);
-    size_t caret_col = cp_count(parts[n - 1]);
-    free(parts[0]);
-    free(parts[n - 1]);
+    size_t caret_col = cp_count(parts.v[n - 1]);
+    free(parts.v[0]);
+    free(parts.v[n - 1]);
 
     // New line array: [0, row) + head + middle parts + tail + (row, end).
     char **nl = xmalloc((e->nlines + 1) * sizeof *nl);
     size_t k = 0;
     for (size_t i = 0; i < e->row; i++) nl[k++] = e->lines[i];
     nl[k++] = buf_steal(&head);
-    buf_free(&head);
-    for (size_t i = 1; i + 1 < n; i++) nl[k++] = parts[i];
+    for (size_t i = 1; i + 1 < n; i++) nl[k++] = parts.v[i];
     nl[k++] = buf_steal(&tail);
-    buf_free(&tail);
     for (size_t i = e->row + 1; i < e->nlines; i++) nl[k++] = e->lines[i];
     free(line);
     free(e->lines);
@@ -299,7 +269,7 @@ static void insert_text(tiny_editor *e, const char *text) {
     e->nlines = k;
     e->row += n - 1;
     e->col = caret_col;
-    free(parts);
+    free(parts.v);
     free(before);
     free(after);
     e->text_dirty = true;
@@ -319,7 +289,6 @@ static void backspace(tiny_editor *e) {
         buf_adds(&b, e->lines[e->row]);
         free(e->lines[e->row - 1]);
         e->lines[e->row - 1] = buf_steal(&b);
-        buf_free(&b);
         free(e->lines[e->row]);
         for (size_t i = e->row; i + 1 < e->nlines; i++) e->lines[i] = e->lines[i + 1];
         e->nlines--;
@@ -342,7 +311,6 @@ static void delete_forward(tiny_editor *e) {
         buf_adds(&b, e->lines[e->row + 1]);
         free(e->lines[e->row]);
         e->lines[e->row] = buf_steal(&b);
-        buf_free(&b);
         free(e->lines[e->row + 1]);
         for (size_t i = e->row + 1; i + 1 < e->nlines; i++) e->lines[i] = e->lines[i + 1];
         e->nlines--;
@@ -423,32 +391,28 @@ tiny_edit_result tiny_editor_handle(tiny_editor *e, const tiny_key *key) {
         if (e->row == 0) return TINY_EDIT_CHANGED;
         e->row--;
         char *expanded = tiny_expand_tabs(e->lines[e->row], TAB);
-        size_t nrows;
-        char **chunks = tiny_wrap_line(expanded, e->width, &nrows);
-        int last_row = (int)nrows - 1;
-        for (size_t i = 0; i < nrows; i++) free(chunks[i]);
-        free(chunks);
+        tiny_strv chunks = tiny_wrap_line(expanded, e->width);
         free(expanded);
-        e->col = col_at_cell(e->lines[e->row], last_row * e->width + ccol);
+        e->col = col_at_cell(e->lines[e->row], ((int)chunks.n - 1) * e->width + ccol);
+        strv_free(&chunks);
         return TINY_EDIT_CHANGED;
     }
     case TINY_KEY_DOWN: {
         int crow, ccol;
         caret(e, &crow, &ccol);
         char *expanded = tiny_expand_tabs(e->lines[e->row], TAB);
-        size_t nrows;
-        char **chunks = tiny_wrap_line(expanded, e->width, &nrows);
-        for (size_t i = 0; i < nrows; i++) free(chunks[i]);
-        free(chunks);
+        tiny_strv chunks = tiny_wrap_line(expanded, e->width);
         free(expanded);
-        if (crow < (int)nrows - 1) {
+        if (crow < (int)chunks.n - 1) {
             size_t n;
             int *cells = cells_of(e->lines[e->row], &n);
             int cell = cells[e->col < n ? e->col : n - 1] + e->width;
             free(cells);
             e->col = col_at_cell(e->lines[e->row], cell);
+            strv_free(&chunks);
             return TINY_EDIT_CHANGED;
         }
+        strv_free(&chunks);
         if (e->row + 1 >= e->nlines) return TINY_EDIT_CHANGED;
         e->row++;
         e->col = col_at_cell(e->lines[e->row], ccol);
@@ -494,50 +458,41 @@ bool tiny_editor_complete_word(tiny_editor *e, char *(*step)(const char *word, v
 
 tiny_editor_view tiny_editor_render(tiny_editor *e, int width, int max_rows) {
     e->width = width > 0 ? width : 1;
-    size_t cap = 16, n = 0;
-    char **rows = xmalloc(cap * sizeof *rows);
+    tiny_strv rows = {0};
     int cursor_row = 0, cursor_col = 0;
     for (size_t line = 0; line < e->nlines; line++) {
         char *disp = xstrdup(e->lines[line]);
         char *expanded = tiny_expand_tabs(disp, TAB);
-        size_t nchunks;
-        char **chunks = tiny_wrap_line(expanded, e->width, &nchunks);
+        tiny_strv chunks = tiny_wrap_line(expanded, e->width);
         free(expanded);
         free(disp);
         if (line == e->row) {
             int cr, cc;
             caret(e, &cr, &cc);
-            cursor_row = (int)n + cr;
+            cursor_row = (int)rows.n + cr;
             cursor_col = cc;
         }
-        for (size_t i = 0; i < nchunks; i++) {
-            if (n == cap) {
-                cap *= 2;
-                rows = realloc(rows, cap * sizeof *rows);
-                if (!rows) abort();
-            }
-            rows[n++] = chunks[i];
-        }
-        free(chunks);
+        for (size_t i = 0; i < chunks.n; i++) strv_push(&rows, chunks.v[i]);
+        free(chunks.v);
     }
 
     int view = max_rows > 0 ? max_rows : 1;
     if (cursor_row < e->scroll) e->scroll = cursor_row;
     else if (cursor_row >= e->scroll + view) e->scroll = cursor_row - view + 1;
-    int max_scroll = (int)n - view;
+    int max_scroll = (int)rows.n - view;
     if (max_scroll < 0) max_scroll = 0;
     if (e->scroll > max_scroll) e->scroll = max_scroll;
     if (e->scroll < 0) e->scroll = 0;
 
-    size_t shown = n > (size_t)e->scroll ? n - (size_t)e->scroll : 0;
+    size_t shown = rows.n > (size_t)e->scroll ? rows.n - (size_t)e->scroll : 0;
     if (shown > (size_t)view) shown = (size_t)view;
     char **out = xmalloc((shown ? shown : 1) * sizeof *out);
     // Free rows scrolled off and after the window.
-    for (size_t i = 0; i < n; i++) {
-        if (i < (size_t)e->scroll || i >= (size_t)e->scroll + shown) free(rows[i]);
-        else out[i - (size_t)e->scroll] = rows[i];
+    for (size_t i = 0; i < rows.n; i++) {
+        if (i < (size_t)e->scroll || i >= (size_t)e->scroll + shown) free(rows.v[i]);
+        else out[i - (size_t)e->scroll] = rows.v[i];
     }
-    free(rows);
+    free(rows.v);
 
     tiny_editor_view v = {
         .rows = out,

@@ -9,7 +9,6 @@
 #include "complete.h"
 #include "resolve.h"
 #include "theme.h"
-#include "util.h"
 
 // The keybindings the TUI accepts, in the order /help prints them.
 static const char *const KEYBINDINGS[][2] = {
@@ -122,28 +121,26 @@ static const char *first_model(const tiny_config *cfg, const char *provider) {
     return NULL;
 }
 
-static void push_option(char ***ids, char ***labels, size_t *n,
-                        const char *id, const char *label) {
-    *ids = realloc(*ids, (*n + 1) * sizeof **ids);
-    *labels = realloc(*labels, (*n + 1) * sizeof **labels);
-    if (!*ids || !*labels) abort();
-    (*ids)[*n] = strdup(id);
-    (*labels)[*n] = strdup(label && label[0] ? label : id);
-    if (!(*ids)[*n] || !(*labels)[*n]) abort();
-    (*n)++;
+void tiny_choice_free(tiny_choice *c) {
+    strv_free(&c->ids);
+    strv_free(&c->labels);
 }
 
-size_t tiny_choose_list(const tiny_config *cfg, tiny_choose what,
-                        const char *provider, char ***out_ids, char ***out_labels) {
-    char **ids = NULL, **labels = NULL;
-    size_t n = 0;
+static void push_option(tiny_choice *c, const char *id, const char *label) {
+    strv_push(&c->ids, strdup(id));
+    strv_push(&c->labels, strdup(label && label[0] ? label : id));
+}
+
+tiny_choice tiny_choose_list(const tiny_config *cfg, tiny_choose what,
+                             const char *provider) {
+    tiny_choice c = {0};
 
     if (what == TINY_CHOOSE_PROVIDER) {
         for (size_t i = 0; i < sizeof BUILTINS / sizeof BUILTINS[0]; i++)
-            push_option(&ids, &labels, &n, BUILTINS[i].id, BUILTINS[i].name);
+            push_option(&c, BUILTINS[i].id, BUILTINS[i].name);
         for (size_t i = 0; i < cfg->custom_providers_len; i++) {
             const tiny_provider *p = &cfg->custom_providers[i];
-            push_option(&ids, &labels, &n, p->id, p->name);
+            push_option(&c, p->id, p->name);
         }
     } else if (what == TINY_CHOOSE_MODEL) {
         const char *prov = provider ? provider : cfg->provider;
@@ -151,13 +148,13 @@ size_t tiny_choose_list(const tiny_config *cfg, tiny_choose what,
             const tiny_provider *custom = find_custom(cfg, prov);
             if (custom) {
                 for (size_t i = 0; i < custom->models_len; i++)
-                    push_option(&ids, &labels, &n, custom->models[i], custom->models[i]);
+                    push_option(&c, custom->models[i], custom->models[i]);
             } else {
                 const char *canonical = tiny_provider_canonical(prov);
                 for (size_t i = 0; i < tiny_catalog_count(); i++) {
                     const tiny_model_info *e = tiny_catalog_get(i);
                     if (strcmp(e->provider, canonical) == 0)
-                        push_option(&ids, &labels, &n, e->id, e->name);
+                        push_option(&c, e->id, e->name);
                 }
             }
         }
@@ -168,14 +165,12 @@ size_t tiny_choose_list(const tiny_config *cfg, tiny_choose what,
         if (info) {
             for (size_t i = 0; i < info->effort_len; i++) {
                 const char *v = strcmp(info->effort[i], "none") == 0 ? "off" : info->effort[i];
-                push_option(&ids, &labels, &n, v, v);
+                push_option(&c, v, v);
             }
         }
     }
 
-    *out_ids = ids;
-    *out_labels = labels;
-    return n;
+    return c;
 }
 
 static const char *provider_name(const tiny_config *cfg, const char *id) {
@@ -318,14 +313,12 @@ char *tiny_complete_command(const char *draft) {
         buf_addc(&b, '/');
         buf_adds(&b, match->name);
         result = b.data ? buf_steal(&b) : NULL;
-        buf_free(&b);
     } else if (nmatch > 1 && strlen(shared) > tn) {
         tui_buf b;
         buf_init(&b);
         buf_addc(&b, '/');
         buf_adds(&b, shared);
         result = b.data ? buf_steal(&b) : NULL;
-        buf_free(&b);
     }
     free(shared);
     return result;

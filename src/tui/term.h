@@ -11,6 +11,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "util.h"
+
 // Decodes one UTF-8 code point; returns its byte length, or 1 with *cp = the
 // raw byte on malformed input.
 int tiny_utf8_decode(const char *s, size_t len, uint32_t *cp);
@@ -25,9 +27,9 @@ int tiny_display_width(const char *text);
 char *tiny_sanitize(const char *text);
 // Expands tabs to `size`-cell stops. Returns malloc'd.
 char *tiny_expand_tabs(const char *text, int size);
-// Splits one logical line into rows no wider than `width`. Returns a malloc'd
-// array of malloc'd rows; *count receives the row count.
-char **tiny_wrap_line(const char *text, int width, size_t *count);
+// Splits one logical line into rows no wider than `width`. Returns an owned
+// list of owned rows.
+tiny_strv tiny_wrap_line(const char *text, int width);
 
 typedef enum {
     TINY_KEY_TEXT,

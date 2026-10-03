@@ -6,6 +6,7 @@
 #include <stddef.h>
 
 #include "config.h"
+#include "util.h"
 
 // The option sets a command asks the TUI to present.
 typedef enum {
@@ -13,6 +14,15 @@ typedef enum {
     TINY_CHOOSE_MODEL,
     TINY_CHOOSE_EFFORT,
 } tiny_choose;
+
+// A chooser's options: `ids` are the values applied, `labels` are shown. The
+// two lists run parallel and have equal length. Free with bl_choice_free.
+typedef struct {
+    tiny_strv ids;
+    tiny_strv labels;
+} tiny_choice;
+
+void tiny_choice_free(tiny_choice *c);
 
 // What a command may reach. The TUI provides the callbacks.
 typedef struct {
@@ -30,12 +40,11 @@ typedef struct {
                  const char *effort, char **err);
 } tiny_command_ctx;
 
-// Builds the options a chooser presents as malloc'd parallel arrays: `*ids`
-// are the values applied, `*labels` are shown. `provider` overrides
-// cfg->provider for TINY_CHOOSE_MODEL. Returns the count, 0 when there is
-// nothing to offer; the caller frees each string and both arrays.
-size_t tiny_choose_list(const tiny_config *cfg, tiny_choose what,
-                        const char *provider, char ***ids, char ***labels);
+// Builds the options a chooser presents. `provider` overrides
+// cfg->provider for TINY_CHOOSE_MODEL. Returns an empty choice when there is
+// nothing to offer.
+tiny_choice tiny_choose_list(const tiny_config *cfg, tiny_choose what,
+                             const char *provider);
 
 // The one-line heading above a chooser's options, malloc'd. `provider`
 // overrides cfg->provider for TINY_CHOOSE_MODEL, naming the provider chosen.

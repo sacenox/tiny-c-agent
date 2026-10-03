@@ -103,7 +103,6 @@ char *tiny_complete_path(const char *word, const char *cwd) {
             buf_add(&b, word, keep);
             buf_adds(&b, cands[0]);
             result = b.data ? buf_steal(&b) : NULL;
-            buf_free(&b);
         }
     } else if (n > 1) {
         char *shared = strdup(cands[0]);
@@ -118,7 +117,6 @@ char *tiny_complete_path(const char *word, const char *cwd) {
             buf_add(&b, word, keep);
             buf_adds(&b, shared);
             result = b.data ? buf_steal(&b) : NULL;
-            buf_free(&b);
         }
         free(shared);
     }

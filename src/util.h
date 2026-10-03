@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdbool.h>
 
 void *xmalloc(size_t n);
 void *xcalloc(size_t n, size_t size);
@@ -45,19 +46,28 @@ int tiny_mkdirs(const char *path);
 // Builds "a/b", avoiding a doubled separator when a already ends in one.
 char *tiny_path_join(const char *a, const char *b);
 
-// Splits `s` on newlines into `*out` (malloc'd array of malloc'd strings) and
-// returns the count. The trailing empty part is included, matching a plain
-// split. Free with tiny_strv_free.
-char **tiny_split_lines(const char *s, size_t *count);
+// An owned, growable list of owned strings. Free with strv_free.
+typedef struct {
+    char **v;
+    size_t n;
+    size_t cap;
+} tiny_strv;
 
-// Frees an array returned by tiny_split_lines.
-void tiny_strv_free(char **v, size_t n);
+void strv_push(tiny_strv *l, char *s);  // takes ownership of `s`
+void strv_free(tiny_strv *l);
+
+// Splits `s` on newlines. The trailing empty part is included, matching a
+// plain split.
+tiny_strv tiny_split_lines(const char *s);
 
 // A malloc'd copy of `s` with trailing newlines and carriage returns removed.
 char *tiny_trim_end(const char *s);
 
 // A malloc'd copy of `s` with leading and trailing ASCII whitespace removed.
 char *tiny_trim(const char *s);
+
+// True when `s` is empty or all ASCII whitespace.
+bool tiny_is_blank(const char *s);
 
 // Reads a whole file. Returns NULL when it cannot be opened or read; errno is
 // left set as the failing call set it.
@@ -71,9 +81,6 @@ int tiny_write_all(int fd, const char *buf, size_t len);
 
 // Sets *dst to a copy of `src` (or ""), freeing the previous value.
 void tiny_set_str(char **dst, const char *src);
-
-// Appends `s` to a growable string array, growing `*cap` as needed.
-void tiny_strv_push(char ***v, size_t *n, size_t *cap, char *s);
 
 // Builds an endpoint URL from a base and a path, avoiding a doubled separator.
 // Returns NULL when `base` is NULL or empty.

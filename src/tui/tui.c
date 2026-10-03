@@ -73,11 +73,6 @@ static bool starts_with(const char *s, const char *prefix) {
     return strncmp(s, prefix, strlen(prefix)) == 0;
 }
 
-static void free_rows(char **rows, size_t n) {
-    for (size_t i = 0; i < n; i++) free(rows[i]);
-    free(rows);
-}
-
 // ---- tui state -------------------------------------------------------------
 
 typedef struct {
@@ -137,9 +132,7 @@ typedef struct {
     bool choice_active;
     tiny_choose choice_kind;
     char *choice_provider;
-    char **choice_ids;
-    char **choice_labels;
-    size_t choice_n;
+    tiny_choice choice;
 
     pthread_mutex_t lock;
     pthread_cond_t cv;
@@ -166,66 +159,49 @@ static double monotonic_now(void) {
 
 // Wraps plain text, then styles each row. Styling after the break lets a
 // continuation row inherit its source line's style.
-static char **render_rows(const tiny_body_line *lines, size_t n, int width, size_t *out_n) {
-    size_t cap = 16, m = 0;
-    char **out = xmalloc(cap * sizeof *out);
+static tiny_strv render_rows(const tiny_body_line *lines, size_t n, int width) {
+    tiny_strv out = {0};
     for (size_t i = 0; i < n; i++) {
         char *clean = tiny_sanitize(lines[i].text);
         char *expanded = tiny_expand_tabs(clean, 4);
-        size_t nrows;
-        char **rows = tiny_wrap_line(expanded, width, &nrows);
+        tiny_strv rows = tiny_wrap_line(expanded, width);
         free(clean);
         free(expanded);
-        for (size_t r = 0; r < nrows; r++) {
-            if (m == cap) {
-                cap *= 2;
-                out = realloc(out, cap * sizeof *out);
-                if (!out) abort();
-            }
-            if (rows[r][0] == '\0') {
-                out[m++] = rows[r];
+        for (size_t r = 0; r < rows.n; r++) {
+            if (rows.v[r][0] == '\0') {
+                strv_push(&out, rows.v[r]);
                 continue;
             }
             tui_buf b;
             buf_init(&b);
             const char *bg = lines[i].bg ? lines[i].bg : tiny_normal_bg();
             sgr_bg(&b, bg);
-            if (lines[i].style) lines[i].style(&b, rows[r]);
-            else buf_adds(&b, rows[r]);
+            if (lines[i].style) lines[i].style(&b, rows.v[r]);
+            else buf_adds(&b, rows.v[r]);
             sgr_bg(&b, bg);
-            out[m++] = buf_steal(&b);
-            buf_free(&b);
-            free(rows[r]);
+            strv_push(&out, buf_steal(&b));
+            free(rows.v[r]);
         }
-        free(rows);
+        free(rows.v);
     }
-    *out_n = m;
     return out;
 }
 
 // render_rows plus the display-only elision for long tool bodies.
-static char **body_rows(const tiny_body_line *lines, size_t n, int width, size_t *out_n) {
-    size_t nrows;
-    char **rows = render_rows(lines, n, width, &nrows);
-    if (nrows <= MAX_BODY_ROWS) {
-        *out_n = nrows;
-        return rows;
-    }
-    size_t hidden = nrows - ELIDED_HEAD - ELIDED_TAIL;
-    size_t m = ELIDED_HEAD + 1 + ELIDED_TAIL;
-    char **out = xmalloc(m * sizeof *out);
-    size_t k = 0;
-    for (size_t i = 0; i < ELIDED_HEAD; i++) out[k++] = rows[i], rows[i] = NULL;
+static tiny_strv body_rows(const tiny_body_line *lines, size_t n, int width) {
+    tiny_strv rows = render_rows(lines, n, width);
+    if (rows.n <= MAX_BODY_ROWS) return rows;
+    size_t hidden = rows.n - ELIDED_HEAD - ELIDED_TAIL;
+    tiny_strv out = {0};
+    for (size_t i = 0; i < ELIDED_HEAD; i++) strv_push(&out, rows.v[i]);
     tui_buf b;
     buf_init(&b);
     char note[64];
     snprintf(note, sizeof note, "... %zu lines not shown ...", hidden);
     fg_dim(&b, note);
-    out[k++] = buf_steal(&b);
-    buf_free(&b);
-    for (size_t i = nrows - ELIDED_TAIL; i < nrows; i++) out[k++] = rows[i], rows[i] = NULL;
-    free_rows(rows, nrows);
-    *out_n = m;
+    strv_push(&out, buf_steal(&b));
+    for (size_t i = rows.n - ELIDED_TAIL; i < rows.n; i++) strv_push(&out, rows.v[i]);
+    free(rows.v);
     return out;
 }
 
@@ -255,23 +231,21 @@ static void push(tui *t, const char *row) {
     }
 }
 
-static void commit_lines(tui *t, tiny_body_line *lines, size_t n) {
-    size_t nrows;
-    char **rows = render_rows(lines, n, t->width > 0 ? t->width : 1, &nrows);
-    for (size_t i = 0; i < nrows; i++) push(t, rows[i]);
-    free_rows(rows, nrows);
+static void commit_lines(tui *t, const tiny_body_line *lines, size_t n) {
+    tiny_strv rows = render_rows(lines, n, t->width > 0 ? t->width : 1);
+    for (size_t i = 0; i < rows.n; i++) push(t, rows.v[i]);
+    strv_free(&rows);
 }
 
 static void commit_user(tui *t, const char *text) {
     t->separator = true;
-    size_t n;
-    char **parts = tiny_split_lines(text, &n);
-    tiny_body_line *lines = xmalloc(n * sizeof *lines);
-    for (size_t i = 0; i < n; i++)
-        lines[i] = (tiny_body_line){parts[i], fg_blue, NULL};
-    free(parts);
-    commit_lines(t, lines, n);
-    for (size_t i = 0; i < n; i++) free(lines[i].text);
+    tiny_strv parts = tiny_split_lines(text);
+    tiny_body_line *lines = xmalloc(parts.n * sizeof *lines);
+    for (size_t i = 0; i < parts.n; i++)
+        lines[i] = (tiny_body_line){parts.v[i], fg_blue, NULL};
+    free(parts.v);
+    commit_lines(t, lines, parts.n);
+    for (size_t i = 0; i < parts.n; i++) free(lines[i].text);
     free(lines);
     t->separator = true;
 }
@@ -295,17 +269,16 @@ static tiny_body_line diff_line(const char *line) {
 
 // Splits a tool result into its display lines, rewriting the trailing exit code
 // for bash and stripping the repeated diff header for edit.
-static tiny_body_line *result_lines(const char *name, const char *text, bool is_error, size_t *out_n) {
+static tiny_blist result_lines(const char *name, const char *text, bool is_error) {
     char *copy = tiny_trim_end(text);
-    size_t raw_n;
-    char **raw = tiny_split_lines(copy, &raw_n);
-    size_t n = raw_n;
+    tiny_strv raw = tiny_split_lines(copy);
+    size_t n = raw.n;
 
     tiny_blist out = {0};
     bool diff = false;
     size_t start = 0;
     if (strcmp(name, "bash") == 0 && n > 0) {
-        const char *last = raw[n - 1];
+        const char *last = raw.v[n - 1];
         if (starts_with(last, "exit code: ")) {
             const char *code = last + strlen("exit code: ");
             n--;
@@ -315,54 +288,50 @@ static tiny_body_line *result_lines(const char *name, const char *text, bool is_
                 buf_adds(&b, "exit ");
                 buf_adds(&b, code);
                 char *tmp = buf_steal(&b);
-                buf_free(&b);
                 bl_push(&out, xstrdup(tmp), fg_red, NULL);
                 free(tmp);
             }
         }
     } else if (strcmp(name, "edit") == 0 && n > 0) {
-        if (starts_with(raw[0], "edited ") || starts_with(raw[0], "created ")) {
+        if (starts_with(raw.v[0], "edited ") || starts_with(raw.v[0], "created ")) {
             start = 1;
-            while (start < n && edit_header(raw[start])) start++;
+            while (start < n && edit_header(raw.v[start])) start++;
             diff = true;
         }
     }
     for (size_t i = start; i < n; i++) {
         if (diff) {
-            tiny_body_line bl = diff_line(raw[i]);
+            tiny_body_line bl = diff_line(raw.v[i]);
             bl_push(&out, bl.text, bl.style, bl.bg);
         } else {
-            bl_push(&out, xstrdup(raw[i]), NULL, NULL);
+            bl_push(&out, xstrdup(raw.v[i]), NULL, NULL);
         }
     }
     free(copy);
-    tiny_strv_free(raw, raw_n);
-    *out_n = out.n;
-    return out.v;
+    strv_free(&raw);
+    return out;
 }
 
-static tiny_body_line *diff_rows(const tiny_file_diff *diffs, size_t ndiffs, size_t *out_n) {
+static tiny_blist diff_rows(const tiny_file_diff *diffs, size_t ndiffs) {
     tiny_blist out = {0};
     for (size_t d = 0; d < ndiffs; d++) {
         bl_push(&out, xstrdup(diffs[d].path), fg_cyan, NULL);
         if (diffs[d].patch) {
             char *copy = tiny_trim_end(diffs[d].patch);
-            size_t n;
-            char **lines = tiny_split_lines(copy, &n);
+            tiny_strv lines = tiny_split_lines(copy);
             size_t start = 0;
-            while (start < n && edit_header(lines[start])) start++;
-            for (size_t i = start; i < n; i++) {
-                tiny_body_line bl = diff_line(lines[i]);
+            while (start < lines.n && edit_header(lines.v[start])) start++;
+            for (size_t i = start; i < lines.n; i++) {
+                tiny_body_line bl = diff_line(lines.v[i]);
                 bl_push(&out, bl.text, bl.style, bl.bg);
             }
-            tiny_strv_free(lines, n);
+            strv_free(&lines);
             free(copy);
         } else if (diffs[d].note) {
             bl_push(&out, xstrdup(diffs[d].note), fg_dim, NULL);
         }
     }
-    *out_n = out.n;
-    return out.v;
+    return out;
 }
 
 static void commit_tool_result(tui *t, const char *name, const char *text, bool is_error,
@@ -377,52 +346,46 @@ static void commit_tool_result(tui *t, const char *name, const char *text, bool 
     }
     int width = t->width - (int)strlen(BODY_PREFIX);
     if (width < 1) width = 1;
-    size_t nlines;
-    tiny_body_line *lines = result_lines(name, text, is_error, &nlines);
-    size_t nrows;
-    char **rows = (strcmp(name, "edit") == 0) ? render_rows(lines, nlines, width, &nrows)
-                                              : body_rows(lines, nlines, width, &nrows);
+    tiny_blist lines = result_lines(name, text, is_error);
+    tiny_strv rows = (strcmp(name, "edit") == 0) ? render_rows(lines.v, lines.n, width)
+                                                 : body_rows(lines.v, lines.n, width);
     tui_buf bodychrome;
     buf_init(&bodychrome);
     fg_dim(&bodychrome, BODY_PREFIX);
     tui_buf errchrome;
     buf_init(&errchrome);
     fg_red(&errchrome, ERROR_PREFIX);
-    for (size_t i = 0; i < nrows; i++) {
-        const char *prefix = (is_error && i == nrows - 1) ? errchrome.data : bodychrome.data;
+    for (size_t i = 0; i < rows.n; i++) {
+        const char *prefix = (is_error && i == rows.n - 1) ? errchrome.data : bodychrome.data;
         tui_buf row;
         buf_init(&row);
         buf_adds(&row, prefix);
-        buf_adds(&row, rows[i]);
+        buf_adds(&row, rows.v[i]);
         if (row.data) push(t, row.data);
         buf_free(&row);
     }
-    free_rows(rows, nrows);
+    strv_free(&rows);
     buf_free(&bodychrome);
     buf_free(&errchrome);
-    for (size_t i = 0; i < nlines; i++) free(lines[i].text);
-    free(lines);
+    bl_free(&lines);
 
     if (diffs && ndiffs > 0) {
-        size_t dn;
-        tiny_body_line *dlines = diff_rows(diffs, ndiffs, &dn);
-        size_t dr;
-        char **drows = render_rows(dlines, dn, width, &dr);
+        tiny_blist dlines = diff_rows(diffs, ndiffs);
+        tiny_strv drows = render_rows(dlines.v, dlines.n, width);
         tui_buf chrome;
         buf_init(&chrome);
         fg_dim(&chrome, BODY_PREFIX);
-        for (size_t i = 0; i < dr; i++) {
+        for (size_t i = 0; i < drows.n; i++) {
             tui_buf row;
             buf_init(&row);
             buf_adds(&row, chrome.data);
-            buf_adds(&row, drows[i]);
+            buf_adds(&row, drows.v[i]);
             if (row.data) push(t, row.data);
             buf_free(&row);
         }
         buf_free(&chrome);
-        free_rows(drows, dr);
-        for (size_t i = 0; i < dn; i++) free(dlines[i].text);
-        free(dlines);
+        strv_free(&drows);
+        bl_free(&dlines);
     }
     t->separator = true;
 }
@@ -432,8 +395,7 @@ static void flush_calls(tui *t) {
         t->separator = true;
         commit_lines(t, &t->pending_calls.v[i], 1);
     }
-    for (size_t i = 0; i < t->pending_calls.n; i++) free(t->pending_calls.v[i].text);
-    t->pending_calls.n = 0;
+    bl_free(&t->pending_calls);
 }
 
 // ---- call line -------------------------------------------------------------
@@ -556,37 +518,34 @@ static void tui_render_locked(tui *t) {
     int height = (t->height > 1 ? t->height - 1 : 1);
 
     char *status = status_line(t);
-    size_t nstatus;
-    char **status_rows = tiny_wrap_line(status, width, &nstatus);
+    tiny_strv status_rows = tiny_wrap_line(status, width);
     free(status);
 
-    size_t ninf;
-    tiny_body_line *infl = tiny_mdstream_pending(&t->reply, &ninf);
-    if (ninf == 0) {
-        tiny_body_lines_free(infl, ninf);
-        infl = tiny_tailstream_pending(&t->activity, &ninf);
+    tiny_blist infl = tiny_mdstream_pending(&t->reply);
+    if (infl.n == 0) {
+        bl_free(&infl);
+        infl = tiny_tailstream_pending(&t->activity);
     }
-    size_t nrows;
-    char **rows = render_rows(infl, ninf, width, &nrows);
-    tiny_body_lines_free(infl, ninf);
+    tiny_strv rows = render_rows(infl.v, infl.n, width);
+    bl_free(&infl);
 
-    int keep = height - (int)nstatus - 1;
+    int keep = height - (int)status_rows.n - 1;
     if (keep < 0) keep = 0;
-    if (keep > (int)nrows) keep = (int)nrows;
-    size_t body_start = nrows - (size_t)keep;
+    if (keep > (int)rows.n) keep = (int)rows.n;
+    size_t body_start = rows.n - (size_t)keep;
 
-    int ed_max = height - (int)nstatus - keep;
+    int ed_max = height - (int)status_rows.n - keep;
     if (ed_max < 1) ed_max = 1;
     tiny_editor_view ev = tiny_editor_render(t->editor, width, ed_max);
 
-    size_t total = nstatus + (size_t)keep + ev.nrows;
+    size_t total = status_rows.n + (size_t)keep + ev.nrows;
     char **lines = xmalloc((total ? total : 1) * sizeof *lines);
     size_t k = 0;
-    for (size_t i = 0; i < (size_t)keep; i++) lines[k++] = rows[body_start + i];
-    for (size_t i = 0; i < nstatus; i++) lines[k++] = status_rows[i];
+    for (size_t i = 0; i < (size_t)keep; i++) lines[k++] = rows.v[body_start + i];
+    for (size_t i = 0; i < status_rows.n; i++) lines[k++] = status_rows.v[i];
     for (size_t i = 0; i < ev.nrows; i++) lines[k++] = ev.rows[i];
 
-    int cursor_row = (int)nstatus + keep + ev.cursor_row;
+    int cursor_row = (int)status_rows.n + keep + ev.cursor_row;
     if (cursor_row >= (int)total) cursor_row = (int)total - 1;
 
     // Every row is painted the same way; the live region adds no attributes.
@@ -596,7 +555,6 @@ static void tui_render_locked(tui *t) {
         append_painted(&painted, lines[i]);
         free(lines[i]);
         lines[i] = buf_steal(&painted);
-        buf_free(&painted);
     }
 
     char *scroll = buf_steal(&t->scroll);
@@ -614,12 +572,13 @@ static void tui_render_locked(tui *t) {
     buf_free(&above);
     free(scroll);
 
-    free_rows(lines, total);
+    for (size_t i = 0; i < total; i++) free(lines[i]);
+    free(lines);
     // The body rows past the kept tail, the status array, and the editor rows
     // were all moved into `lines` and freed with it.
-    for (size_t i = 0; i < body_start; i++) free(rows[i]);
-    free(rows);
-    free(status_rows);
+    for (size_t i = 0; i < body_start; i++) free(rows.v[i]);
+    free(rows.v);
+    free(status_rows.v);
     free(ev.rows);
 }
 
@@ -637,18 +596,20 @@ static void end_turn(tui *t, const char *line) {
     t->writing_tool = NULL;
     t->paused = false;
     activity_reset(t);
-    size_t n;
-    tiny_body_line *lines = tiny_mdstream_flush(&t->reply, &n);
-    commit_lines(t, lines, n);
-    tiny_body_lines_free(lines, n);
+    tiny_blist lines = tiny_mdstream_flush(&t->reply);
+    commit_lines(t, lines.v, lines.n);
+    bl_free(&lines);
     flush_calls(t);
     t->separator = true;
     push(t, line);
 }
 
-// Ends the turn with the buffer's line, consuming the buffer.
-static void end_turn_buf(tui *t, tui_buf *b) {
-    char *line = buf_steal(b);
+// Ends the turn with one styled line.
+static void end_turn_styled(tui *t, tiny_fg_fn style, const char *text) {
+    tui_buf b;
+    buf_init(&b);
+    style(&b, text);
+    char *line = buf_steal(&b);
     end_turn(t, line);
     free(line);
 }
@@ -681,15 +642,13 @@ static void message_text_usage(const char *json, char **text_out, long *total_ou
     }
     yyjson_doc_free(doc);
     *text_out = buf_steal(&b);
-    buf_free(&b);
 }
 
 static void commit_message(tui *t, const char *json) {
     activity_reset(t);
-    size_t n;
-    tiny_body_line *lines = tiny_mdstream_flush(&t->reply, &n);
-    commit_lines(t, lines, n);
-    tiny_body_lines_free(lines, n);
+    tiny_blist lines = tiny_mdstream_flush(&t->reply);
+    commit_lines(t, lines.v, lines.n);
+    bl_free(&lines);
 
     char *text;
     long total;
@@ -699,17 +658,13 @@ static void commit_message(tui *t, const char *json) {
     // trimEnd for the contains check
     size_t tl = strlen(text);
     while (tl > 0 && (text[tl - 1] == '\n' || text[tl - 1] == '\r')) text[--tl] = '\0';
-    size_t nt = 0;
-    while (text[nt] == ' ' || text[nt] == '\t' || text[nt] == '\n') nt++;
-    if (text[nt] != '\0' && !strstr(t->streamed, text)) {
-        size_t fn;
-        tiny_body_line *fed = tiny_mdstream_feed(&t->reply, text, &fn);
-        commit_lines(t, fed, fn);
-        tiny_body_lines_free(fed, fn);
-        size_t mn;
-        tiny_body_line *more = tiny_mdstream_flush(&t->reply, &mn);
-        commit_lines(t, more, mn);
-        tiny_body_lines_free(more, mn);
+    if (!tiny_is_blank(text) && !strstr(t->streamed, text)) {
+        tiny_blist fed = tiny_mdstream_feed(&t->reply, text);
+        commit_lines(t, fed.v, fed.n);
+        bl_free(&fed);
+        tiny_blist more = tiny_mdstream_flush(&t->reply);
+        commit_lines(t, more.v, more.n);
+        bl_free(&more);
     }
     free(text);
     if (t->streamed) t->streamed[0] = '\0';
@@ -734,21 +689,16 @@ static void on_event(const tiny_event *e, void *user) {
             if (!t->streamed) abort();
             memcpy(t->streamed + a, e->u.text.delta, b + 1);
         }
-        size_t n;
-        tiny_body_line *lines = tiny_mdstream_feed(&t->reply, e->u.text.delta, &n);
-        commit_lines(t, lines, n);
-        tiny_body_lines_free(lines, n);
+        tiny_blist lines = tiny_mdstream_feed(&t->reply, e->u.text.delta);
+        commit_lines(t, lines.v, lines.n);
+        bl_free(&lines);
         break;
     }
     case TINY_EVENT_REASONING: {
-        size_t np;
-        tiny_body_line *p = tiny_mdstream_pending(&t->reply, &np);
-        bool empty = (np == 0);
-        tiny_body_lines_free(p, np);
-        if (empty) {
-            size_t z;
-            tiny_tailstream_feed(&t->activity, e->u.reasoning.delta, &z);
-        }
+        tiny_blist p = tiny_mdstream_pending(&t->reply);
+        bool empty = (p.n == 0);
+        bl_free(&p);
+        if (empty) tiny_tailstream_feed(&t->activity, e->u.reasoning.delta);
         break;
     }
     case TINY_EVENT_TOOL_CALL_START:
@@ -758,10 +708,9 @@ static void on_event(const tiny_event *e, void *user) {
     case TINY_EVENT_TOOL_CALL: {
         free(t->writing_tool);
         t->writing_tool = NULL;
-        size_t n;
-        tiny_body_line *lines = tiny_mdstream_flush(&t->reply, &n);
-        commit_lines(t, lines, n);
-        tiny_body_lines_free(lines, n);
+        tiny_blist lines = tiny_mdstream_flush(&t->reply);
+        commit_lines(t, lines.v, lines.n);
+        bl_free(&lines);
         activity_reset(t);
         tui_buf b;
         buf_init(&b);
@@ -777,14 +726,11 @@ static void on_event(const tiny_event *e, void *user) {
         buf_adds(&b, summary);
         free(summary);
         bl_push(&t->pending_calls, buf_steal(&b), NULL, NULL);
-        buf_free(&b);
         break;
     }
-    case TINY_EVENT_TOOL_OUTPUT: {
-        size_t z;
-        tiny_tailstream_feed(&t->activity, e->u.tool_output.chunk, &z);
+    case TINY_EVENT_TOOL_OUTPUT:
+        tiny_tailstream_feed(&t->activity, e->u.tool_output.chunk);
         break;
-    }
     case TINY_EVENT_TOOL_RESULT:
         activity_reset(t);
         commit_tool_result(t, e->u.tool_result.name, e->u.tool_result.text, e->u.tool_result.is_error,
@@ -798,34 +744,20 @@ static void on_event(const tiny_event *e, void *user) {
         buf_init(&p);
         buf_adds(&p, "! ");
         buf_adds(&p, e->u.error.message);
-        tui_buf b;
-        buf_init(&b);
-        fg_red(&b, p.data ? p.data : "");
+        end_turn_styled(t, fg_red, p.data ? p.data : "");
         buf_free(&p);
-        end_turn_buf(t, &b);
         break;
     }
-    case TINY_EVENT_NO_MODEL: {
-        tui_buf b;
-        buf_init(&b);
-        fg_red(&b, "! no model configured");
-        end_turn_buf(t, &b);
+    case TINY_EVENT_NO_MODEL:
+        end_turn_styled(t, fg_red, "! no model configured");
         break;
-    }
-    case TINY_EVENT_CANCELLED: {
-        tui_buf b;
-        buf_init(&b);
-        fg_red(&b, "! cancelled");
-        end_turn_buf(t, &b);
+    case TINY_EVENT_CANCELLED:
+        end_turn_styled(t, fg_red, "! cancelled");
         break;
-    }
     case TINY_EVENT_COMPLETE: {
-        tui_buf b;
-        buf_init(&b);
         char text[64];
         snprintf(text, sizeof text, "[complete · %ds]", (int)elapsed(t));
-        fg_dim(&b, text);
-        end_turn_buf(t, &b);
+        end_turn_styled(t, fg_dim, text);
         break;
     }
     }
@@ -881,10 +813,9 @@ static void command_write(void *user, char *line) {
     tui *t = user;
     t->separator = true;
     tiny_body_line bl = {line, NULL, NULL};
-    size_t nrows;
-    char **rows = render_rows(&bl, 1, t->width > 0 ? t->width : 1, &nrows);
-    for (size_t i = 0; i < nrows; i++) push(t, rows[i]);
-    free_rows(rows, nrows);
+    tiny_strv rows = render_rows(&bl, 1, t->width > 0 ? t->width : 1);
+    for (size_t i = 0; i < rows.n; i++) push(t, rows.v[i]);
+    strv_free(&rows);
     t->separator = true;
 }
 
@@ -975,17 +906,9 @@ static int command_apply(void *user, const char *provider, const char *model,
 
 // Releases the pending choice and its options.
 static void free_choice(tui *t) {
-    for (size_t i = 0; i < t->choice_n; i++) {
-        free(t->choice_ids[i]);
-        free(t->choice_labels[i]);
-    }
-    free(t->choice_ids);
-    free(t->choice_labels);
+    tiny_choice_free(&t->choice);
     free(t->choice_provider);
-    t->choice_ids = NULL;
-    t->choice_labels = NULL;
     t->choice_provider = NULL;
-    t->choice_n = 0;
     t->choice_active = false;
 }
 
@@ -1002,9 +925,9 @@ static void command_error(tui *t, const char *msg) {
 // `provider` overrides the config provider for a model list.
 static void start_choose(tui *t, tiny_choose what, const char *provider) {
     free_choice(t);
-    char **ids = NULL, **labels = NULL;
-    size_t n = tiny_choose_list(t->c->cfg, what, provider, &ids, &labels);
-    if (n == 0) {
+    tiny_choice options = tiny_choose_list(t->c->cfg, what, provider);
+    if (options.ids.n == 0) {
+        tiny_choice_free(&options);
         const char *msg = what == TINY_CHOOSE_MODEL ? "! select a provider first"
                           : what == TINY_CHOOSE_EFFORT ? "! no configurable effort for this model"
                                                        : "! no providers configured";
@@ -1014,52 +937,40 @@ static void start_choose(tui *t, tiny_choose what, const char *provider) {
     t->choice_active = true;
     t->choice_kind = what;
     t->choice_provider = provider ? xstrdup(provider) : NULL;
-    t->choice_ids = ids;
-    t->choice_labels = labels;
-    t->choice_n = n;
+    t->choice = options;
 
     // The heading and options are one block, so no blank line separates them.
     char *title = tiny_choose_title(t->c->cfg, what, provider);
-    size_t total = n + 1;
-    tiny_body_line *lines = xmalloc(total * sizeof *lines);
-    lines[0] = (tiny_body_line){title, NULL, NULL};
-    for (size_t i = 0; i < n; i++) {
+    tiny_blist lines = {0};
+    bl_push(&lines, title, NULL, NULL);
+    for (size_t i = 0; i < options.labels.n; i++) {
         tui_buf b;
         buf_init(&b);
         buf_addf(&b, "  %zu. ", i + 1);
-        buf_adds(&b, labels[i]);
-        lines[i + 1] = (tiny_body_line){buf_steal(&b), NULL, NULL};
-        buf_free(&b);
+        buf_adds(&b, options.labels.v[i]);
+        bl_push(&lines, buf_steal(&b), NULL, NULL);
     }
     t->separator = true;
-    commit_lines(t, lines, total);
-    for (size_t i = 0; i < total; i++) free(lines[i].text);
-    free(lines);
+    commit_lines(t, lines.v, lines.n);
+    bl_free(&lines);
     t->separator = true;
 }
 
 // Turns the submitted line into the pending choice: a 1-based index, an id, or
 // a label. An invalid line reports and clears the choice.
 static void resolve_choice(tui *t, const char *text) {
-    size_t n = t->choice_n;
-    const char *p = text;
-    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
-    size_t len = strlen(p);
-    while (len > 0 && (p[len - 1] == ' ' || p[len - 1] == '\t' || p[len - 1] == '\n' || p[len - 1] == '\r'))
-        len--;
-    char *word = xmalloc(len + 1);
-    memcpy(word, p, len);
-    word[len] = '\0';
+    char *word = tiny_trim(text);
 
     const char *chosen = NULL;
     char *end = NULL;
     long idx = strtol(word, &end, 10);
-    if (word[0] != '\0' && *end == '\0' && idx >= 1 && (size_t)idx <= n)
-        chosen = t->choice_ids[idx - 1];
+    if (word[0] != '\0' && *end == '\0' && idx >= 1 && (size_t)idx <= t->choice.ids.n)
+        chosen = t->choice.ids.v[idx - 1];
     if (!chosen) {
-        for (size_t i = 0; i < n; i++) {
-            if (strcmp(word, t->choice_ids[i]) == 0 || strcmp(word, t->choice_labels[i]) == 0) {
-                chosen = t->choice_ids[i];
+        for (size_t i = 0; i < t->choice.ids.n; i++) {
+            if (strcmp(word, t->choice.ids.v[i]) == 0 ||
+                strcmp(word, t->choice.labels.v[i]) == 0) {
+                chosen = t->choice.ids.v[i];
                 break;
             }
         }
@@ -1185,10 +1096,7 @@ static void submit(tui *t) {
             t->steering_waiting = false;
             pthread_cond_broadcast(&t->cv);
             tiny_editor_clear(t->editor);
-            size_t len = strlen(text);
-            size_t s = 0;
-            while (s < len && (text[s] == ' ' || text[s] == '\t' || text[s] == '\n')) s++;
-            if (text[s] != '\0') commit_user(t, text);
+            if (!tiny_is_blank(text)) commit_user(t, text);
             free(text);
             tui_render_locked(t);
             return;
@@ -1203,10 +1111,7 @@ static void submit(tui *t) {
         tui_render_locked(t);
         return;
     }
-    size_t len = strlen(text);
-    size_t s = 0;
-    while (s < len && (text[s] == ' ' || text[s] == '\t' || text[s] == '\n')) s++;
-    if (text[s] == '\0') {
+    if (tiny_is_blank(text)) {
         free(text);
         return;
     }
@@ -1314,10 +1219,9 @@ static void terminal_restore(tui *t) {
 static void push_line(tui *t, char *text) {
     t->separator = true;
     tiny_body_line bl = {text, NULL, NULL};
-    size_t nrows;
-    char **rows = render_rows(&bl, 1, t->width > 0 ? t->width : 80, &nrows);
-    for (size_t i = 0; i < nrows; i++) push(t, rows[i]);
-    free_rows(rows, nrows);
+    tiny_strv rows = render_rows(&bl, 1, t->width > 0 ? t->width : 80);
+    for (size_t i = 0; i < rows.n; i++) push(t, rows.v[i]);
+    strv_free(&rows);
     free(bl.text);
     t->separator = true;
 }
@@ -1332,7 +1236,6 @@ static void push_banner(tui *t) {
         buf_adds(&b, "agents · ");
         buf_adds(&b, r->agent_files[i].path);
         push_line(t, buf_steal(&b));
-        buf_free(&b);
     }
     if (r->skills_len > 0) {
         tui_buf b;
@@ -1343,7 +1246,6 @@ static void push_banner(tui *t) {
             buf_adds(&b, r->skills[i].name);
         }
         push_line(t, buf_steal(&b));
-        buf_free(&b);
     }
 }
 
@@ -1499,8 +1401,7 @@ int tiny_tui_run(const tiny_tui_config *c) {
     tiny_editor_free(t.editor);
     tiny_mdstream_free(&t.reply);
     tiny_tailstream_free(&t.activity);
-    for (size_t i = 0; i < t.pending_calls.n; i++) free(t.pending_calls.v[i].text);
-    free(t.pending_calls.v);
+    bl_free(&t.pending_calls);
     free_choice(&t);
     free(t.detail);
     free(t.writing_tool);

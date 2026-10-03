@@ -151,9 +151,24 @@ char *tiny_path_join(const char *a, const char *b) {
     return p;
 }
 
-char **tiny_split_lines(const char *s, size_t *count) {
-    size_t cap = 8, n = 0;
-    char **out = xmalloc(cap * sizeof *out);
+void strv_push(tiny_strv *l, char *s) {
+    if (l->n == l->cap) {
+        l->cap = l->cap ? l->cap * 2 : 8;
+        l->v = xrealloc(l->v, l->cap * sizeof *l->v);
+    }
+    l->v[l->n++] = s;
+}
+
+void strv_free(tiny_strv *l) {
+    for (size_t i = 0; i < l->n; i++) free(l->v[i]);
+    free(l->v);
+    l->v = NULL;
+    l->n = 0;
+    l->cap = 0;
+}
+
+tiny_strv tiny_split_lines(const char *s) {
+    tiny_strv l = {0};
     const char *p = s;
     for (;;) {
         const char *nl = strchr(p, '\n');
@@ -161,21 +176,11 @@ char **tiny_split_lines(const char *s, size_t *count) {
         char *line = xmalloc(len + 1);
         memcpy(line, p, len);
         line[len] = '\0';
-        if (n == cap) {
-            cap *= 2;
-            out = xrealloc(out, cap * sizeof *out);
-        }
-        out[n++] = line;
+        strv_push(&l, line);
         if (!nl) break;
         p = nl + 1;
     }
-    *count = n;
-    return out;
-}
-
-void tiny_strv_free(char **v, size_t n) {
-    for (size_t i = 0; i < n; i++) free(v[i]);
-    free(v);
+    return l;
 }
 
 char *tiny_trim_end(const char *s) {
@@ -201,6 +206,11 @@ char *tiny_trim(const char *s) {
     return out;
 }
 
+bool tiny_is_blank(const char *s) {
+    while (is_space(*s)) s++;
+    return *s == '\0';
+}
+
 void tiny_set_str(char **dst, const char *src) {
     free(*dst);
     *dst = xstrdup(src ? src : "");
@@ -217,14 +227,6 @@ int tiny_write_all(int fd, const char *buf, size_t len) {
         len -= (size_t)n;
     }
     return 0;
-}
-
-void tiny_strv_push(char ***v, size_t *n, size_t *cap, char *s) {
-    if (*n == *cap) {
-        *cap = *cap ? *cap * 2 : 8;
-        *v = xrealloc(*v, *cap * sizeof **v);
-    }
-    (*v)[(*n)++] = s;
 }
 
 char *tiny_read_file(const char *path) {

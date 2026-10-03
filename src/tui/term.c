@@ -190,17 +190,13 @@ char *tiny_expand_tabs(const char *text, int size) {
     return buf_steal(&out);
 }
 
-char **tiny_wrap_line(const char *text, int width, size_t *count) {
-    size_t cap = 8, n = 0;
-    char **rows = malloc(cap * sizeof *rows);
+tiny_strv tiny_wrap_line(const char *text, int width) {
+    tiny_strv rows = {0};
     tui_buf cur;
     buf_init(&cur);
     int used = 0;
     if (width <= 0 || text[0] == '\0') {
-        if (cap == 0) cap = 1;
-        rows[0] = strdup("");
-        *count = 1;
-        buf_free(&cur);
+        strv_push(&rows, strdup(""));
         return rows;
     }
     size_t len = strlen(text);
@@ -218,11 +214,7 @@ char **tiny_wrap_line(const char *text, int width, size_t *count) {
         if (nb <= 0) break;
         int w = tiny_char_width(cp);
         if (used + w > width && cur.len > 0) {
-            if (n == cap) {
-                cap *= 2;
-                rows = realloc(rows, cap * sizeof *rows);
-            }
-            rows[n++] = buf_steal(&cur);
+            strv_push(&rows, buf_steal(&cur));
             buf_init(&cur);
             used = 0;
         }
@@ -230,12 +222,7 @@ char **tiny_wrap_line(const char *text, int width, size_t *count) {
         used += w;
         i += (size_t)nb;
     }
-    if (n == cap) {
-        cap += 1;
-        rows = realloc(rows, cap * sizeof *rows);
-    }
-    rows[n++] = buf_steal(&cur);
-    *count = n;
+    strv_push(&rows, buf_steal(&cur));
     return rows;
 }
 
